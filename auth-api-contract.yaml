@@ -1,0 +1,664 @@
+openapi: 3.0.3
+info:
+  title: HMIS Authentication & Access Control API
+  version: "1.0"
+  description: >
+    Authentication, MFA, RBAC, session, and audit-logging contract designed to satisfy
+    the Digital Health (Health Information Management Procedures) Regulations, 2025,
+    Regulation 12 (Security of sensitive personal data), and related DHA certification
+    requirements: unique authenticated login, mandatory MFA, role-based least-privilege
+    access, tamper-proof audit trails, encrypted sessions, and account lockout on
+    repeated failed logins.
+
+servers:
+  - url: https://api.{yourdomain}.co.ke/v1
+
+tags:
+  - name: Auth
+  - name: MFA
+  - name: Password
+  - name: Sessions
+  - name: Users
+  - name: Roles
+  - name: AuditLog
+
+paths:
+
+  # ---------------- AUTHENTICATION ----------------
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Step 1 of login - validate username/password, issue MFA challenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Credentials valid; MFA challenge required (no session yet)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  challenge_token: { type: string, description: "Short-lived token (5 min), used to complete MFA step" }
+                  mfa_methods: { type: array, items: { type: string, enum: [totp, biometric] } }
+        "401":
+          description: Invalid credentials. Logged as a failed-login audit event.
+        "423":
+          description: >
+            Account locked due to exceeding failed-login threshold. Response includes
+            lockout_until timestamp and instructions to contact an administrator.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  locked_until: { type: string, format: date-time }
+                  reason: { type: string, example: "Exceeded maximum failed login attempts" }
+
+  /auth/login/mfa:
+    post:
+      tags: [Auth]
+      summary: Step 2 of login - verify MFA code, issue session tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_token, method, code]
+              properties:
+                challenge_token: { type: string }
+                method: { type: string, enum: [totp, biometric] }
+                code: { type: string, description: "TOTP code, or biometric assertion payload" }
+      responses:
+        "200":
+          description: MFA verified; authenticated session established
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          description: Invalid MFA code. Logged as an audit event; counts toward lockout threshold.
+        "410":
+          description: Challenge token expired - restart login from /auth/login
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange a valid refresh token for a new access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: New token pair issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          description: Refresh token invalid, expired, or revoked
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current session's refresh token
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204":
+          description: Logged out; session revoked and logged in audit trail
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the current authenticated user's profile and effective permissions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+  # ---------------- MFA ENROLLMENT ----------------
+
+  /auth/mfa/totp/setup:
+    post:
+      tags: [MFA]
+      summary: Begin TOTP enrollment - returns provisioning QR/secret
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string }
+                  qr_code_uri: { type: string }
+                  backup_codes: { type: array, items: { type: string }, description: "One-time-use recovery codes, shown once" }
+
+  /auth/mfa/totp/confirm:
+    post:
+      tags: [MFA]
+      summary: Confirm TOTP enrollment by verifying an initial code
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200": { description: "TOTP enabled as an active MFA factor" }
+        "400": { description: "Incorrect code" }
+
+  /auth/mfa/biometric/register:
+    post:
+      tags: [MFA]
+      summary: Register a biometric factor (optional secondary factor per Reg. 12(a)(v))
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device_public_key: { type: string, description: "WebAuthn/platform-authenticator public key" }
+                device_label: { type: string }
+      responses:
+        "201": { description: "Biometric factor registered" }
+
+  /auth/mfa/factors:
+    get:
+      tags: [MFA]
+      summary: List enrolled MFA factors for the current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    type: { type: string, enum: [totp, biometric] }
+                    label: { type: string }
+                    created_at: { type: string, format: date-time }
+
+  /auth/mfa/factors/{factorId}:
+    delete:
+      tags: [MFA]
+      summary: Remove an MFA factor (requires at least one factor remain enrolled)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: factorId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: "Factor removed" }
+        "409": { description: "Cannot remove the last remaining MFA factor" }
+
+  # ---------------- PASSWORD MANAGEMENT ----------------
+
+  /auth/password/change:
+    post:
+      tags: [Password]
+      summary: Change password while authenticated
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string, description: "Must meet complexity policy - see /auth/password/policy" }
+      responses:
+        "204": { description: "Password changed; all other sessions revoked; logged as audit event" }
+        "422": { description: "New password fails complexity, length, or dictionary-check policy" }
+
+  /auth/password/policy:
+    get:
+      tags: [Password]
+      summary: Retrieve current password complexity requirements (for client-side validation UI)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  min_length: { type: integer, example: 12 }
+                  require_uppercase: { type: boolean }
+                  require_number: { type: boolean }
+                  require_symbol: { type: boolean }
+                  reject_common_passwords: { type: boolean }
+                  max_age_days: { type: integer, example: 90 }
+
+  /auth/password/reset/request:
+    post:
+      tags: [Password]
+      summary: Request a password reset link/code (unauthenticated)
+      description: >
+        Reset logic: generates a cryptographically random, single-use token (256-bit),
+        stored server-side as a hash (never in plaintext), valid for 15 minutes.
+        Token is delivered out-of-band to the email/phone already on file for the
+        account - never to an address supplied in this request - so an attacker
+        cannot redirect the reset. Rate-limited to 5 requests per username per hour
+        and 20 requests per source IP per hour, independent of whether the account
+        exists, to blunt both enumeration and flooding. Every call to this endpoint
+        is written to the audit log (including attempts for non-existent usernames),
+        tagged action=password_reset_requested, so repeated attempts against one
+        account are visible to admins even though the response never reveals whether
+        the account exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+      responses:
+        "202":
+          description: >
+            Always returns 202 regardless of whether the account exists, and regardless
+            of whether the account is locked (a locked account can still have its
+            password reset by its owner, but remains locked - see /users/{userId}/unlock
+            for admin-side unlock, which is a separate action).
+        "429":
+          description: Rate limit exceeded for this username or source IP.
+
+  /auth/password/reset/confirm:
+    post:
+      tags: [Password]
+      summary: Complete a password reset using the out-of-band token
+      description: >
+        Reset logic: token is single-use and is invalidated immediately on first use,
+        whether the attempt succeeds or fails, to prevent replay. On success: the new
+        password is validated against /auth/password/policy, all existing sessions and
+        refresh tokens for the account are revoked, all other unused reset tokens for
+        the account are invalidated, and the action is written to the audit log as
+        action=password_reset_completed. This endpoint never returns access/refresh
+        tokens directly - the user must still complete a fresh login, including the
+        MFA step, so a password reset alone can never bypass MFA.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reset_token, new_password]
+              properties:
+                reset_token: { type: string }
+                new_password: { type: string }
+      responses:
+        "204": { description: "Password reset; logged as audit event; all sessions revoked; login (with MFA) required to obtain a new session" }
+        "400": { description: "Invalid, expired, or already-used reset token" }
+        "422": { description: "New password fails complexity policy" }
+
+  /users/{userId}/unlock:
+    post:
+      tags: [Users]
+      summary: Admin-side unlock of an account locked by repeated failed logins
+      description: >
+        A locked account (see the 423 response on /auth/login) cannot be unlocked by
+        the user themselves via password reset - lockout requires explicit admin
+        action, consistent with treating repeated failed logins as a security event
+        rather than a self-service inconvenience. This clears the lockout counter and
+        lockout_until timestamp. It does NOT reset the password or MFA factors -
+        those remain the user's own unless separately reset. Logged as an audit event
+        with the acting admin's user_id attached.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, description: "Admin's stated reason, stored with the audit entry" }
+      responses:
+        "204": { description: "Account unlocked" }
+        "409": { description: "Account is not currently locked" }
+
+  # ---------------- SESSION MANAGEMENT ----------------
+
+  /auth/sessions:
+    get:
+      tags: [Sessions]
+      summary: List active sessions/devices for the current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+
+  /auth/sessions/{sessionId}:
+    delete:
+      tags: [Sessions]
+      summary: Revoke a specific session (e.g., "log out this device")
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: "Session revoked; logged as audit event" }
+
+  # ---------------- USER & ROLE MANAGEMENT (admin) ----------------
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List users (admin only, requires users:read permission)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: role, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [active, invited, suspended, pending_review] } }
+        - { name: stale_access, in: query, schema: { type: boolean }, description: "Users whose access hasn't been reviewed within the quarterly cycle" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UserProfile" }
+
+  /users/invitations:
+    post:
+      tags: [Users]
+      summary: Invite a new staff user (admin only) - does not create a usable account yet
+      description: >
+        Onboarding logic: this creates a pending user record with status=invited.
+        No password exists yet. A single-use invite token (24-hour expiry) is
+        generated and delivered out-of-band to the email supplied - never returned
+        in this response. The invitee sets their own password and enrolls MFA when
+        they accept the invite (see /users/invitations/{token}/accept), so no
+        shared secret ever passes through the admin's hands. Logged as an audit
+        event: action=user_invited, actor=inviting admin.
+
+        provider_identifier is conditionally required: the server checks whether
+        any role in role_ids has requires_provider_identifier=true (e.g. Doctor,
+        Nurse, Clinical Officer). If so, provider_identifier must be present and
+        is stored as attested by the inviting admin (not yet verified against a
+        registry). If every assigned role has requires_provider_identifier=false
+        (e.g. Receptionist, Accountant, Records Clerk), provider_identifier is
+        omitted entirely - it is not a required or even meaningful field for
+        those accounts. A user whose roles later change from non-clinical to
+        clinical (e.g. promoted, or given a dual role) will be required to supply
+        a provider_identifier at that point via PATCH /users/{userId}.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name, email, role_ids]
+              properties:
+                full_name: { type: string }
+                email: { type: string, format: email }
+                provider_identifier:
+                  type: string
+                  description: >
+                    Required only if role_ids includes a role with
+                    requires_provider_identifier=true. Omit for purely
+                    administrative roles.
+                role_ids: { type: array, items: { type: string } }
+      responses:
+        "201":
+          description: Invitation created and sent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserProfile" }
+        "409":
+          description: An account or pending invitation already exists for this email
+        "422":
+          description: >
+            provider_identifier missing while a selected role requires it
+            (requires_provider_identifier=true on at least one role in role_ids).
+
+  /users/invitations/{token}:
+    get:
+      tags: [Users]
+      summary: Validate an invite token before showing the accept-invite page (unauthenticated)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  full_name: { type: string }
+                  email: { type: string }
+                  organization: { type: string }
+        "410": { description: "Invitation expired or already used" }
+
+  /users/invitations/{token}/accept:
+    post:
+      tags: [Users]
+      summary: Accept an invitation - set initial password and complete account activation
+      description: >
+        Sets the account's password (validated against /auth/password/policy),
+        transitions status from invited to active, and invalidates the invite
+        token immediately. Does NOT log the user in directly - after this call,
+        the user is redirected to MFA enrollment (mandatory before first real
+        login, per Reg. 12(a)(iv)), then to normal login. Logged as an audit
+        event: action=invitation_accepted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: >
+            Account activated. Returns a short-lived enrollment_token (separate from
+            a real session) scoped only to complete MFA setup at /auth/mfa/totp/setup.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enrollment_token: { type: string }
+        "400": { description: "Invalid/expired token, or password fails policy" }
+
+  /users/invitations/{token}/resend:
+    post:
+      tags: [Users]
+      summary: Admin resends an invitation (invalidates the prior token, issues a new one)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: "New invitation sent; prior token invalidated" }
+
+  /users/{userId}:
+    patch:
+      tags: [Users]
+      summary: Update a user's details, roles, or status (admin only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role_ids: { type: array, items: { type: string } }
+                status: { type: string, enum: [active, suspended] }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserProfile" }
+
+  /users/{userId}/access-review:
+    post:
+      tags: [Users]
+      summary: Record a quarterly access review decision for this user (Reg. 12(b)(iii))
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reviewed_by]
+              properties:
+                decision: { type: string, enum: [confirm_access, revoke_access, modify_access] }
+                notes: { type: string }
+      responses:
+        "200": { description: "Review recorded; logged as audit event; sets next review due date" }
+
+  /roles:
+    get:
+      tags: [Roles]
+      summary: List all roles and their permission sets
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Role" }
+    post:
+      tags: [Roles]
+      summary: Create a new role (superuser/admin only - restricted per Reg. 12(b)(iv))
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Role" }
+      responses:
+        "201":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Role" }
+
+  # ---------------- AUDIT LOG ----------------
+
+  /audit-logs:
+    get:
+      tags: [AuditLog]
+      summary: >
+        Query the tamper-proof audit trail (Reg. 12(c)). Append-only at the storage
+        layer; this endpoint is read-only - there is no update or delete operation
+        anywhere in this API for audit records.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: user_id, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string }, description: "e.g. login_failed, login_success, password_changed, mfa_factor_removed, role_changed" }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AuditLogEntry" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    TokenPair:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer, description: "Access token TTL in seconds" }
+
+    UserProfile:
+      type: object
+      properties:
+        id: { type: string }
+        full_name: { type: string }
+        username: { type: string }
+        email: { type: string }
+        provider_identifier: { type: string }
+        roles: { type: array, items: { type: string } }
+        permissions: { type: array, items: { type: string }, description: "Effective permissions resolved from roles" }
+        status: { type: string, enum: [invited, active, suspended, pending_review] }
+        mfa_enrolled: { type: boolean }
+        last_access_review_at: { type: string, format: date-time }
+        next_access_review_due: { type: string, format: date-time }
+
+    Role:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        is_superuser_role: { type: boolean, description: "Restricted - only assignable by an existing superuser (Reg. 12(b)(iv))" }
+        requires_provider_identifier:
+          type: boolean
+          description: >
+            True for clinical/healthcare-provider roles (doctor, nurse, clinical
+            officer, lab tech) where Reg. 12(b)(v) requires the account be linked
+            to a provider identifier issued by the System. False for administrative
+            roles (receptionist, accountant, records clerk, IT admin) which need
+            system access and RBAC like any staff account, but have no such
+            regulatory linkage - inventing an identifier for them would misrepresent
+            what the field means.
+        permissions: { type: array, items: { type: string }, description: "e.g. patients:read, patients:write, billing:read, admin:users:write" }
+
+    Session:
+      type: object
+      properties:
+        id: { type: string }
+        device_label: { type: string }
+        ip_address: { type: string }
+        created_at: { type: string, format: date-time }
+        last_active_at: { type: string, format: date-time }
+        current: { type: boolean }
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        user_id: { type: string }
+        action: { type: string }
+        target_resource: { type: string }
+        ip_address: { type: string }
+        result: { type: string, enum: [success, failure] }
+        metadata: { type: object, additionalProperties: true }
