@@ -12,7 +12,7 @@ import (
 )
 
 func (r *Repository) UpdatePasswordHash(ctx context.Context, userID, hash string) error {
-	return r.queries.UpdatePasswordHash(ctx, sqlcgen.UpdatePasswordHashParams{ID: userID, PasswordHash: hash})
+	return r.queries.UpdatePasswordHash(ctx, sqlcgen.UpdatePasswordHashParams{ID: userID, PasswordHash: &hash})
 }
 
 func (r *Repository) CreatePasswordResetToken(ctx context.Context, token auth.PasswordResetToken) error {

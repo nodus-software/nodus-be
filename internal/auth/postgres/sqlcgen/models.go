@@ -151,6 +151,25 @@ type AuditLog struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type EnrollmentToken struct {
+	ID         string             `json:"id"`
+	UserID     string             `json:"user_id"`
+	TokenHash  string             `json:"token_hash"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type Invitation struct {
+	ID        string             `json:"id"`
+	UserID    string             `json:"user_id"`
+	InvitedBy string             `json:"invited_by"`
+	TokenHash string             `json:"token_hash"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type LoginChallenge struct {
 	ID                 string             `json:"id"`
 	UserID             string             `json:"user_id"`
@@ -242,7 +261,7 @@ type User struct {
 	FullName            string             `json:"full_name"`
 	Username            string             `json:"username"`
 	Email               string             `json:"email"`
-	PasswordHash        string             `json:"password_hash"`
+	PasswordHash        *string            `json:"password_hash"`
 	ProviderIdentifier  *string            `json:"provider_identifier"`
 	Status              UserStatus         `json:"status"`
 	FailedLoginAttempts int32              `json:"failed_login_attempts"`

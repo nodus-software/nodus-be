@@ -1,0 +1,109 @@
+package postgres
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"nodus-health/internal/users"
+	"nodus-health/internal/users/postgres/sqlcgen"
+)
+
+func (r *Repository) ListUsers(ctx context.Context, filter users.ListUsersFilter) ([]users.User, error) {
+	var status *sqlcgen.UserStatus
+	if filter.Status != nil {
+		s := sqlcgen.UserStatus(*filter.Status)
+		status = &s
+	}
+	rows, err := r.queries.ListUsers(ctx, sqlcgen.ListUsersParams{
+		Role: filter.Role, Status: status, StaleAccess: filter.StaleAccess,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]users.User, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, users.User{
+			ID: row.ID, FullName: row.FullName, Username: row.Username, Email: row.Email,
+			ProviderIdentifier: row.ProviderIdentifier, Status: users.Status(row.Status),
+			LockedUntil:         fromNullTimestamptz(row.LockedUntil),
+			LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
+			NextAccessReviewDue: fromNullTimestamptz(row.NextAccessReviewDue),
+			MFAEnrolled:         row.MfaEnrolled,
+			RoleNames:           row.RoleNames,
+			Permissions:         row.PermissionCodes,
+		})
+	}
+	return out, nil
+}
+
+func (r *Repository) GetUserByID(ctx context.Context, id string) (*users.User, error) {
+	row, err := r.queries.GetUserWithRolesByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, users.ErrUserNotFound
+		}
+		return nil, err
+	}
+	return &users.User{
+		ID: row.ID, FullName: row.FullName, Username: row.Username, Email: row.Email,
+		ProviderIdentifier: row.ProviderIdentifier, Status: users.Status(row.Status),
+		LockedUntil:         fromNullTimestamptz(row.LockedUntil),
+		LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
+		NextAccessReviewDue: fromNullTimestamptz(row.NextAccessReviewDue),
+		MFAEnrolled:         row.MfaEnrolled,
+		RoleNames:           row.RoleNames,
+		Permissions:         row.PermissionCodes,
+	}, nil
+}
+
+func (r *Repository) ReplaceUserRoles(ctx context.Context, userID string, roleIDs []string) error {
+	if err := r.queries.DeleteUserRoles(ctx, userID); err != nil {
+		return err
+	}
+	for _, roleID := range roleIDs {
+		if err := r.queries.InsertUserRole(ctx, sqlcgen.InsertUserRoleParams{UserID: userID, RoleID: roleID}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) UpdateUserStatus(ctx context.Context, userID, status string) error {
+	return r.queries.UpdateUserStatus(ctx, sqlcgen.UpdateUserStatusParams{ID: userID, Status: sqlcgen.UserStatus(status)})
+}
+
+func (r *Repository) SetProviderIdentifier(ctx context.Context, userID, identifier string) error {
+	return r.queries.SetProviderIdentifier(ctx, sqlcgen.SetProviderIdentifierParams{ID: userID, ProviderIdentifier: &identifier})
+}
+
+func (r *Repository) RecordAccessReview(ctx context.Context, userID string, reviewedAt, nextDue time.Time) error {
+	return r.queries.RecordAccessReview(ctx, sqlcgen.RecordAccessReviewParams{
+		ID: userID, LastAccessReviewAt: toTimestamptz(reviewedAt), NextAccessReviewDue: toTimestamptz(nextDue),
+	})
+}
+
+func (r *Repository) UnlockUser(ctx context.Context, userID string) error {
+	return r.queries.UnlockUser(ctx, userID)
+}
+
+func (r *Repository) GetRolesByIDs(ctx context.Context, ids []string) ([]users.Role, error) {
+	rows, err := r.queries.GetRolesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]users.Role, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, users.Role{
+			ID: row.ID, Name: row.Name, IsSuperuserRole: row.IsSuperuserRole,
+			RequiresProviderIdentifier: row.RequiresProviderIdentifier,
+		})
+	}
+	return out, nil
+}
+
+func (r *Repository) HasSuperuserRole(ctx context.Context, userID string) (bool, error) {
+	return r.queries.HasSuperuserRole(ctx, userID)
+}

@@ -40,3 +40,57 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 	)
 	return err
 }
+
+const listAuditLogs = `-- name: ListAuditLogs :many
+SELECT id, timestamp, user_id, action, target_resource, ip_address, result, metadata, created_at FROM audit_logs
+WHERE ($2::uuid IS NULL OR user_id = $2)
+  AND ($3::text IS NULL OR action = $3)
+  AND ($4::timestamptz IS NULL OR "timestamp" >= $4)
+  AND ($5::timestamptz IS NULL OR "timestamp" <= $5)
+ORDER BY "timestamp" DESC
+LIMIT $1
+`
+
+type ListAuditLogsParams struct {
+	Limit  int32              `json:"limit"`
+	UserID *string            `json:"user_id"`
+	Action *string            `json:"action"`
+	FromTs pgtype.Timestamptz `json:"from_ts"`
+	ToTs   pgtype.Timestamptz `json:"to_ts"`
+}
+
+func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditLogs,
+		arg.Limit,
+		arg.UserID,
+		arg.Action,
+		arg.FromTs,
+		arg.ToTs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Timestamp,
+			&i.UserID,
+			&i.Action,
+			&i.TargetResource,
+			&i.IpAddress,
+			&i.Result,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

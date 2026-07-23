@@ -36,3 +36,36 @@ func (r *Repository) Insert(ctx context.Context, entry audit.Entry) error {
 		Metadata:       metadata,
 	})
 }
+
+func (r *Repository) List(ctx context.Context, filter audit.Filter, limit int) ([]audit.Entry, error) {
+	var from, to pgtype.Timestamptz
+	if filter.From != nil {
+		from = pgtype.Timestamptz{Time: *filter.From, Valid: true}
+	}
+	if filter.To != nil {
+		to = pgtype.Timestamptz{Time: *filter.To, Valid: true}
+	}
+
+	rows, err := r.queries.ListAuditLogs(ctx, sqlcgen.ListAuditLogsParams{
+		Limit: int32(limit), UserID: filter.UserID, Action: filter.Action, FromTs: from, ToTs: to,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]audit.Entry, 0, len(rows))
+	for _, row := range rows {
+		var metadata map[string]any
+		if len(row.Metadata) > 0 {
+			if err := json.Unmarshal(row.Metadata, &metadata); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, audit.Entry{
+			ID: row.ID, Timestamp: row.Timestamp.Time, UserID: row.UserID, Action: row.Action,
+			TargetResource: row.TargetResource, IPAddress: row.IpAddress,
+			Result: audit.Result(row.Result), Metadata: metadata,
+		})
+	}
+	return out, nil
+}

@@ -30,3 +30,13 @@ func (s *Service) Record(ctx context.Context, entry Entry) error {
 	}
 	return s.repo.Insert(ctx, entry)
 }
+
+// maxQueryResults bounds GET /audit-logs: the contract defines no
+// pagination parameters for this endpoint, so a fixed cap keeps an
+// unfiltered query from returning an unbounded result set.
+const maxQueryResults = 500
+
+// Query returns audit entries matching filter, most recent first.
+func (s *Service) Query(ctx context.Context, filter Filter) ([]Entry, error) {
+	return s.repo.List(ctx, filter, maxQueryResults)
+}

@@ -12,9 +12,13 @@ import (
 )
 
 func userFromRow(u sqlcgen.User) *auth.User {
+	var passwordHash string
+	if u.PasswordHash != nil {
+		passwordHash = *u.PasswordHash
+	}
 	return &auth.User{
 		ID: u.ID, FullName: u.FullName, Username: u.Username, Email: u.Email,
-		PasswordHash: u.PasswordHash, ProviderIdentifier: u.ProviderIdentifier,
+		PasswordHash: passwordHash, ProviderIdentifier: u.ProviderIdentifier,
 		Status:              auth.UserStatus(u.Status),
 		FailedLoginAttempts: int(u.FailedLoginAttempts),
 		LockedUntil:         fromNullTimestamptz(u.LockedUntil),

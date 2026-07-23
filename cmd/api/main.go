@@ -10,8 +10,14 @@ import (
 	auditpg "nodus-health/internal/audit/postgres"
 	"nodus-health/internal/auth"
 	authpg "nodus-health/internal/auth/postgres"
+	"nodus-health/internal/invitation"
+	invitationpg "nodus-health/internal/invitation/postgres"
 	"nodus-health/internal/platform/db"
+	"nodus-health/internal/roles"
+	rolespg "nodus-health/internal/roles/postgres"
 	"nodus-health/internal/server"
+	"nodus-health/internal/users"
+	userspg "nodus-health/internal/users/postgres"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
 )
@@ -80,6 +86,33 @@ func main() {
 	authService := auth.NewService(authRepo, auditService, mailer, log, authCfg)
 	authHandler := auth.NewHandler(authService, cfg.JWTSecret, log)
 
+	// authService.Authorize (session/user validity + effective permissions)
+	// is the single Authorizer every domain's Authenticate middleware uses,
+	// so a revoked session or role change takes effect on the very next
+	// request no matter which domain's endpoint is called.
+	rolesRepo := rolespg.New(pool)
+	rolesService := roles.NewService(rolesRepo, auditService, log)
+	rolesHandler := roles.NewHandler(rolesService, authService, cfg.JWTSecret, log)
+
+	usersRepo := userspg.New(pool)
+	usersService := users.NewService(usersRepo, auditService, log, users.Config{
+		AccessReviewCycle: cfg.AccessReviewCycle,
+	})
+	usersHandler := users.NewHandler(usersService, authService, cfg.JWTSecret, log)
+
+	invitationRepo := invitationpg.New(pool)
+	invitationService := invitation.NewService(invitationRepo, auditService, mailer, log, invitation.Config{
+		BaseURL:            cfg.BaseUrl,
+		InviteTokenTTL:     cfg.InviteTokenTTL,
+		EnrollmentTokenTTL: cfg.EnrollmentTokenTTL,
+		BcryptCost:         cfg.BcryptCost,
+		OrganizationName:   cfg.OrganizationName,
+		PasswordPolicy:     authCfg.PasswordPolicy,
+	})
+	invitationHandler := invitation.NewHandler(invitationService, authService, cfg.JWTSecret, log)
+
+	auditHandler := audit.NewHandler(auditService, authService, cfg.JWTSecret, log)
+
 	srv := server.New(server.Config{
 		Port:           cfg.AppPort,
 		AllowedOrigins: cfg.AllowedOrigins,
@@ -88,7 +121,7 @@ func main() {
 		IdleTimeout:    cfg.IdleTimeout,
 		ShutdownGrace:  cfg.ShutdownGrace,
 		RequestTimeout: cfg.WriteTimeout,
-	}, log, authHandler)
+	}, log, authHandler, rolesHandler, usersHandler, invitationHandler, auditHandler)
 
 	log.Info("starting nodus health api", "env", cfg.AppEnv, "port", cfg.AppPort)
 

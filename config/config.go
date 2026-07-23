@@ -53,6 +53,11 @@ type Config struct {
 	ChallengeTokenTTL     time.Duration
 	PasswordResetTokenTTL time.Duration
 	InviteTokenTTL        time.Duration
+	EnrollmentTokenTTL    time.Duration
+
+	// Organization / access review
+	OrganizationName  string
+	AccessReviewCycle time.Duration
 
 	// Password hashing
 	BcryptCost int
@@ -130,6 +135,10 @@ func Load() (*Config, error) {
 		ChallengeTokenTTL:     5 * time.Minute,
 		PasswordResetTokenTTL: 15 * time.Minute,
 		InviteTokenTTL:        24 * time.Hour,
+		EnrollmentTokenTTL:    30 * time.Minute,
+
+		OrganizationName:  getEnv("ORGANIZATION_NAME", "Nodus Health"),
+		AccessReviewCycle: getEnvDuration("ACCESS_REVIEW_CYCLE", 90*24*time.Hour),
 
 		BcryptCost: getEnvInt("BCRYPT_COST", 12),
 

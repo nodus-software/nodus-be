@@ -131,8 +131,8 @@ UPDATE users SET password_hash = $2, password_changed_at = now() WHERE id = $1
 `
 
 type UpdatePasswordHashParams struct {
-	ID           string `json:"id"`
-	PasswordHash string `json:"password_hash"`
+	ID           string  `json:"id"`
+	PasswordHash *string `json:"password_hash"`
 }
 
 func (q *Queries) UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error {
