@@ -8,6 +8,7 @@ import (
 
 	"nodus-health/internal/audit"
 	"nodus-health/internal/auth"
+	"nodus-health/internal/tenant"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
 	"nodus-health/pkg/utility"
@@ -128,8 +129,9 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 		return nil, err
 	}
 
+	tenantID, _ := tenant.ID(ctx)
 	return &UserProfileResponse{
-		ID: userID, FullName: req.FullName, Username: req.Email, Email: req.Email,
+		ID: userID, TenantID: tenantID, FullName: req.FullName, Username: req.Email, Email: req.Email,
 		ProviderIdentifier: providerIdentifier, Roles: roleNames, Permissions: []string{},
 		Status: string(UserStatusInvited), MFAEnrolled: false,
 	}, nil

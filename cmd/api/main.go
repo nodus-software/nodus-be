@@ -12,6 +12,7 @@ import (
 	authpg "nodus-health/internal/auth/postgres"
 	"nodus-health/internal/invitation"
 	invitationpg "nodus-health/internal/invitation/postgres"
+	"nodus-health/internal/organizations"
 	"nodus-health/internal/platform/db"
 	"nodus-health/internal/roles"
 	rolespg "nodus-health/internal/roles/postgres"
@@ -113,6 +114,12 @@ func main() {
 
 	auditHandler := audit.NewHandler(auditService, authService, cfg.JWTSecret, log)
 
+	organizationService := organizations.NewService(
+		pool, mailer, cfg.BaseUrl, cfg.BcryptCost, authCfg.PasswordPolicy, log,
+		cfg.AppEnv != "production",
+	)
+	organizationHandler := organizations.NewHandler(organizationService, authService, cfg.JWTSecret, cfg.EnrollmentTokenTTL)
+
 	srv := server.New(server.Config{
 		Port:           cfg.AppPort,
 		AllowedOrigins: cfg.AllowedOrigins,
@@ -121,7 +128,9 @@ func main() {
 		IdleTimeout:    cfg.IdleTimeout,
 		ShutdownGrace:  cfg.ShutdownGrace,
 		RequestTimeout: cfg.WriteTimeout,
-	}, log, authHandler, rolesHandler, usersHandler, invitationHandler, auditHandler)
+		TenantResolver: organizationService,
+		TenantPool:     pool,
+	}, log, organizationHandler, authHandler, rolesHandler, usersHandler, invitationHandler, auditHandler)
 
 	log.Info("starting nodus health api", "env", cfg.AppEnv, "port", cfg.AppPort)
 

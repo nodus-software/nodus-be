@@ -25,7 +25,7 @@ func invitationFromRow(i sqlcgen.Invitation) *invitation.Invitation {
 }
 
 func (r *Repository) GetRolesByIDs(ctx context.Context, ids []string) ([]invitation.Role, error) {
-	rows, err := r.queries.GetRolesByIDs(ctx, ids)
+	rows, err := r.q(ctx).GetRolesByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func (r *Repository) GetRolesByIDs(ctx context.Context, ids []string) ([]invitat
 }
 
 func (r *Repository) GetUserByEmail(ctx context.Context, email string) (*invitation.PendingUser, error) {
-	u, err := r.queries.GetUserByEmail(ctx, email)
+	u, err := r.q(ctx).GetUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, invitation.ErrUserNotFound
@@ -50,7 +50,7 @@ func (r *Repository) GetUserByEmail(ctx context.Context, email string) (*invitat
 }
 
 func (r *Repository) GetUserByID(ctx context.Context, id string) (*invitation.PendingUser, error) {
-	u, err := r.queries.GetUserByID(ctx, id)
+	u, err := r.q(ctx).GetUserByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, invitation.ErrUserNotFound
@@ -61,7 +61,7 @@ func (r *Repository) GetUserByID(ctx context.Context, id string) (*invitation.Pe
 }
 
 func (r *Repository) CreateInvitedUser(ctx context.Context, params invitation.CreateInvitedUserParams) error {
-	_, err := r.queries.CreateInvitedUser(ctx, sqlcgen.CreateInvitedUserParams{
+	_, err := r.q(ctx).CreateInvitedUser(ctx, sqlcgen.CreateInvitedUserParams{
 		ID: params.ID, FullName: params.FullName, Username: params.Username,
 		Email: params.Email, ProviderIdentifier: params.ProviderIdentifier,
 	})
@@ -69,11 +69,11 @@ func (r *Repository) CreateInvitedUser(ctx context.Context, params invitation.Cr
 }
 
 func (r *Repository) AssignUserRole(ctx context.Context, userID, roleID string) error {
-	return r.queries.AssignUserRole(ctx, sqlcgen.AssignUserRoleParams{UserID: userID, RoleID: roleID})
+	return r.q(ctx).AssignUserRole(ctx, sqlcgen.AssignUserRoleParams{UserID: userID, RoleID: roleID})
 }
 
 func (r *Repository) GetUserRoleNames(ctx context.Context, userID string) ([]string, error) {
-	names, err := r.queries.GetUserRoleNames(ctx, userID)
+	names, err := r.q(ctx).GetUserRoleNames(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -84,14 +84,14 @@ func (r *Repository) GetUserRoleNames(ctx context.Context, userID string) ([]str
 }
 
 func (r *Repository) CreateInvitation(ctx context.Context, inv invitation.Invitation) error {
-	return r.queries.CreateInvitation(ctx, sqlcgen.CreateInvitationParams{
+	return r.q(ctx).CreateInvitation(ctx, sqlcgen.CreateInvitationParams{
 		ID: inv.ID, UserID: inv.UserID, InvitedBy: inv.InvitedBy,
 		TokenHash: inv.TokenHash, ExpiresAt: toTimestamptz(inv.ExpiresAt),
 	})
 }
 
 func (r *Repository) GetInvitationByTokenHash(ctx context.Context, tokenHash string) (*invitation.Invitation, error) {
-	row, err := r.queries.GetInvitationByTokenHash(ctx, tokenHash)
+	row, err := r.q(ctx).GetInvitationByTokenHash(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, invitation.ErrTokenInvalid
@@ -102,7 +102,7 @@ func (r *Repository) GetInvitationByTokenHash(ctx context.Context, tokenHash str
 }
 
 func (r *Repository) GetLatestInvitationByUserID(ctx context.Context, userID string) (*invitation.Invitation, error) {
-	row, err := r.queries.GetLatestInvitationByUserID(ctx, userID)
+	row, err := r.q(ctx).GetLatestInvitationByUserID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, invitation.ErrTokenInvalid
@@ -113,17 +113,17 @@ func (r *Repository) GetLatestInvitationByUserID(ctx context.Context, userID str
 }
 
 func (r *Repository) ConsumeInvitation(ctx context.Context, id string) error {
-	return r.queries.ConsumeInvitation(ctx, id)
+	return r.q(ctx).ConsumeInvitation(ctx, id)
 }
 
 func (r *Repository) ActivateUserWithPassword(ctx context.Context, userID, passwordHash string) error {
-	return r.queries.ActivateUserWithPassword(ctx, sqlcgen.ActivateUserWithPasswordParams{
+	return r.q(ctx).ActivateUserWithPassword(ctx, sqlcgen.ActivateUserWithPasswordParams{
 		ID: userID, PasswordHash: &passwordHash,
 	})
 }
 
 func (r *Repository) CreateEnrollmentToken(ctx context.Context, token invitation.EnrollmentToken) error {
-	return r.queries.CreateEnrollmentToken(ctx, sqlcgen.CreateEnrollmentTokenParams{
+	return r.q(ctx).CreateEnrollmentToken(ctx, sqlcgen.CreateEnrollmentTokenParams{
 		ID: token.ID, UserID: token.UserID, TokenHash: token.TokenHash, ExpiresAt: toTimestamptz(token.ExpiresAt),
 	})
 }

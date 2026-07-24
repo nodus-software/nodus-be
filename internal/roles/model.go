@@ -8,6 +8,7 @@ import "time"
 // decisions elsewhere (role creation, user invitation/role assignment).
 type Role struct {
 	ID                         string
+	TenantID                   string
 	Name                       string
 	Description                string
 	IsSuperuserRole            bool

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"nodus-health/internal/middleware"
 	"nodus-health/pkg/logger"
@@ -27,6 +28,8 @@ type Config struct {
 	IdleTimeout    time.Duration
 	ShutdownGrace  time.Duration
 	RequestTimeout time.Duration
+	TenantResolver middleware.TenantResolver
+	TenantPool     *pgxpool.Pool
 }
 
 type Server struct {
@@ -48,6 +51,12 @@ func New(cfg Config, log *logger.Logger, registrars ...RouteRegistrar) *Server {
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.CORS(cfg.AllowedOrigins))
 	r.Use(middleware.Timeout(cfg.RequestTimeout))
+	if cfg.TenantResolver != nil {
+		r.Use(middleware.ResolveTenant(cfg.TenantResolver))
+	}
+	if cfg.TenantPool != nil {
+		r.Use(middleware.TenantTransaction(cfg.TenantPool))
+	}
 
 	for _, reg := range registrars {
 		reg.RegisterRoutes(r)

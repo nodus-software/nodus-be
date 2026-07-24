@@ -2,6 +2,7 @@ package roles
 
 type RoleResponse struct {
 	ID                         string   `json:"id"`
+	TenantID                   string   `json:"tenant_id"`
 	Name                       string   `json:"name"`
 	Description                string   `json:"description"`
 	IsSuperuserRole            bool     `json:"is_superuser_role"`
@@ -19,7 +20,7 @@ type CreateRoleRequest struct {
 
 func toRoleResponse(r Role) RoleResponse {
 	return RoleResponse{
-		ID: r.ID, Name: r.Name, Description: r.Description,
+		ID: r.ID, TenantID: r.TenantID, Name: r.Name, Description: r.Description,
 		IsSuperuserRole: r.IsSuperuserRole, RequiresProviderIdentifier: r.RequiresProviderIdentifier,
 		Permissions: r.Permissions,
 	}

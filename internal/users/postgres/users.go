@@ -17,7 +17,7 @@ func (r *Repository) ListUsers(ctx context.Context, filter users.ListUsersFilter
 		s := sqlcgen.UserStatus(*filter.Status)
 		status = &s
 	}
-	rows, err := r.queries.ListUsers(ctx, sqlcgen.ListUsersParams{
+	rows, err := r.q(ctx).ListUsers(ctx, sqlcgen.ListUsersParams{
 		Role: filter.Role, Status: status, StaleAccess: filter.StaleAccess,
 	})
 	if err != nil {
@@ -26,7 +26,7 @@ func (r *Repository) ListUsers(ctx context.Context, filter users.ListUsersFilter
 	out := make([]users.User, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, users.User{
-			ID: row.ID, FullName: row.FullName, Username: row.Username, Email: row.Email,
+			ID: row.ID, TenantID: row.TenantID, FullName: row.FullName, Username: row.Username, Email: row.Email,
 			ProviderIdentifier: row.ProviderIdentifier, Status: users.Status(row.Status),
 			LockedUntil:         fromNullTimestamptz(row.LockedUntil),
 			LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
@@ -40,7 +40,7 @@ func (r *Repository) ListUsers(ctx context.Context, filter users.ListUsersFilter
 }
 
 func (r *Repository) GetUserByID(ctx context.Context, id string) (*users.User, error) {
-	row, err := r.queries.GetUserWithRolesByID(ctx, id)
+	row, err := r.q(ctx).GetUserWithRolesByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, users.ErrUserNotFound
@@ -48,7 +48,7 @@ func (r *Repository) GetUserByID(ctx context.Context, id string) (*users.User, e
 		return nil, err
 	}
 	return &users.User{
-		ID: row.ID, FullName: row.FullName, Username: row.Username, Email: row.Email,
+		ID: row.ID, TenantID: row.TenantID, FullName: row.FullName, Username: row.Username, Email: row.Email,
 		ProviderIdentifier: row.ProviderIdentifier, Status: users.Status(row.Status),
 		LockedUntil:         fromNullTimestamptz(row.LockedUntil),
 		LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
@@ -60,11 +60,11 @@ func (r *Repository) GetUserByID(ctx context.Context, id string) (*users.User, e
 }
 
 func (r *Repository) ReplaceUserRoles(ctx context.Context, userID string, roleIDs []string) error {
-	if err := r.queries.DeleteUserRoles(ctx, userID); err != nil {
+	if err := r.q(ctx).DeleteUserRoles(ctx, userID); err != nil {
 		return err
 	}
 	for _, roleID := range roleIDs {
-		if err := r.queries.InsertUserRole(ctx, sqlcgen.InsertUserRoleParams{UserID: userID, RoleID: roleID}); err != nil {
+		if err := r.q(ctx).InsertUserRole(ctx, sqlcgen.InsertUserRoleParams{UserID: userID, RoleID: roleID}); err != nil {
 			return err
 		}
 	}
@@ -72,25 +72,25 @@ func (r *Repository) ReplaceUserRoles(ctx context.Context, userID string, roleID
 }
 
 func (r *Repository) UpdateUserStatus(ctx context.Context, userID, status string) error {
-	return r.queries.UpdateUserStatus(ctx, sqlcgen.UpdateUserStatusParams{ID: userID, Status: sqlcgen.UserStatus(status)})
+	return r.q(ctx).UpdateUserStatus(ctx, sqlcgen.UpdateUserStatusParams{ID: userID, Status: sqlcgen.UserStatus(status)})
 }
 
 func (r *Repository) SetProviderIdentifier(ctx context.Context, userID, identifier string) error {
-	return r.queries.SetProviderIdentifier(ctx, sqlcgen.SetProviderIdentifierParams{ID: userID, ProviderIdentifier: &identifier})
+	return r.q(ctx).SetProviderIdentifier(ctx, sqlcgen.SetProviderIdentifierParams{ID: userID, ProviderIdentifier: &identifier})
 }
 
 func (r *Repository) RecordAccessReview(ctx context.Context, userID string, reviewedAt, nextDue time.Time) error {
-	return r.queries.RecordAccessReview(ctx, sqlcgen.RecordAccessReviewParams{
+	return r.q(ctx).RecordAccessReview(ctx, sqlcgen.RecordAccessReviewParams{
 		ID: userID, LastAccessReviewAt: toTimestamptz(reviewedAt), NextAccessReviewDue: toTimestamptz(nextDue),
 	})
 }
 
 func (r *Repository) UnlockUser(ctx context.Context, userID string) error {
-	return r.queries.UnlockUser(ctx, userID)
+	return r.q(ctx).UnlockUser(ctx, userID)
 }
 
 func (r *Repository) GetRolesByIDs(ctx context.Context, ids []string) ([]users.Role, error) {
-	rows, err := r.queries.GetRolesByIDs(ctx, ids)
+	rows, err := r.q(ctx).GetRolesByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -105,5 +105,5 @@ func (r *Repository) GetRolesByIDs(ctx context.Context, ids []string) ([]users.R
 }
 
 func (r *Repository) HasSuperuserRole(ctx context.Context, userID string) (bool, error) {
-	return r.queries.HasSuperuserRole(ctx, userID)
+	return r.q(ctx).HasSuperuserRole(ctx, userID)
 }

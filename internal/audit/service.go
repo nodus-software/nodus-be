@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"nodus-health/internal/tenant"
 	"nodus-health/pkg/utility"
 )
 
@@ -25,6 +26,9 @@ func (s *Service) Record(ctx context.Context, entry Entry) error {
 		return err
 	}
 	entry.ID = id
+	if entry.TenantID == "" {
+		entry.TenantID, _ = tenant.ID(ctx)
+	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}

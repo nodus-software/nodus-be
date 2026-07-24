@@ -12,21 +12,21 @@ import (
 
 func sessionFromRow(s sqlcgen.Session) *auth.Session {
 	return &auth.Session{
-		ID: s.ID, UserID: s.UserID, DeviceLabel: s.DeviceLabel, IPAddress: s.IpAddress,
+		ID: s.ID, TenantID: s.TenantID, UserID: s.UserID, DeviceLabel: s.DeviceLabel, IPAddress: s.IpAddress,
 		UserAgent: s.UserAgent, CreatedAt: fromTimestamptz(s.CreatedAt),
 		LastActiveAt: fromTimestamptz(s.LastActiveAt), RevokedAt: fromNullTimestamptz(s.RevokedAt),
 	}
 }
 
 func (r *Repository) CreateSession(ctx context.Context, session auth.Session) error {
-	return r.queries.CreateSession(ctx, sqlcgen.CreateSessionParams{
+	return r.q(ctx).CreateSession(ctx, sqlcgen.CreateSessionParams{
 		ID: session.ID, UserID: session.UserID, DeviceLabel: session.DeviceLabel,
 		IpAddress: session.IPAddress, UserAgent: session.UserAgent,
 	})
 }
 
 func (r *Repository) GetSessionByID(ctx context.Context, id string) (*auth.Session, error) {
-	s, err := r.queries.GetSessionByID(ctx, id)
+	s, err := r.q(ctx).GetSessionByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrSessionNotFound
@@ -37,7 +37,7 @@ func (r *Repository) GetSessionByID(ctx context.Context, id string) (*auth.Sessi
 }
 
 func (r *Repository) ListActiveSessionsByUser(ctx context.Context, userID string) ([]auth.Session, error) {
-	rows, err := r.queries.ListActiveSessionsByUser(ctx, userID)
+	rows, err := r.q(ctx).ListActiveSessionsByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -49,19 +49,19 @@ func (r *Repository) ListActiveSessionsByUser(ctx context.Context, userID string
 }
 
 func (r *Repository) RevokeSession(ctx context.Context, id string) error {
-	return r.queries.RevokeSession(ctx, id)
+	return r.q(ctx).RevokeSession(ctx, id)
 }
 
 func (r *Repository) RevokeSessionsByUser(ctx context.Context, userID string) error {
-	return r.queries.RevokeSessionsByUser(ctx, userID)
+	return r.q(ctx).RevokeSessionsByUser(ctx, userID)
 }
 
 func (r *Repository) RevokeSessionsByUserExceptSession(ctx context.Context, userID, exceptSessionID string) error {
-	return r.queries.RevokeSessionsByUserExceptSession(ctx, sqlcgen.RevokeSessionsByUserExceptSessionParams{
+	return r.q(ctx).RevokeSessionsByUserExceptSession(ctx, sqlcgen.RevokeSessionsByUserExceptSessionParams{
 		UserID: userID, ID: exceptSessionID,
 	})
 }
 
 func (r *Repository) TouchSessionLastActive(ctx context.Context, id string) error {
-	return r.queries.TouchSessionLastActive(ctx, id)
+	return r.q(ctx).TouchSessionLastActive(ctx, id)
 }

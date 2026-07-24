@@ -11,14 +11,14 @@ import (
 )
 
 func (r *Repository) CreateRefreshToken(ctx context.Context, token auth.RefreshToken) error {
-	return r.queries.CreateRefreshToken(ctx, sqlcgen.CreateRefreshTokenParams{
+	return r.q(ctx).CreateRefreshToken(ctx, sqlcgen.CreateRefreshTokenParams{
 		ID: token.ID, SessionID: token.SessionID, UserID: token.UserID,
 		TokenHash: token.TokenHash, ExpiresAt: toTimestamptz(token.ExpiresAt),
 	})
 }
 
 func (r *Repository) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (*auth.RefreshToken, error) {
-	t, err := r.queries.GetRefreshTokenByHash(ctx, tokenHash)
+	t, err := r.q(ctx).GetRefreshTokenByHash(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrRefreshTokenInvalid
@@ -33,19 +33,19 @@ func (r *Repository) GetRefreshTokenByHash(ctx context.Context, tokenHash string
 }
 
 func (r *Repository) RevokeRefreshToken(ctx context.Context, id string) error {
-	return r.queries.RevokeRefreshToken(ctx, id)
+	return r.q(ctx).RevokeRefreshToken(ctx, id)
 }
 
 func (r *Repository) RevokeRefreshTokensByUser(ctx context.Context, userID string) error {
-	return r.queries.RevokeRefreshTokensByUser(ctx, userID)
+	return r.q(ctx).RevokeRefreshTokensByUser(ctx, userID)
 }
 
 func (r *Repository) RevokeRefreshTokensByUserExceptSession(ctx context.Context, userID, exceptSessionID string) error {
-	return r.queries.RevokeRefreshTokensByUserExceptSession(ctx, sqlcgen.RevokeRefreshTokensByUserExceptSessionParams{
+	return r.q(ctx).RevokeRefreshTokensByUserExceptSession(ctx, sqlcgen.RevokeRefreshTokensByUserExceptSessionParams{
 		UserID: userID, SessionID: exceptSessionID,
 	})
 }
 
 func (r *Repository) RevokeRefreshTokensBySession(ctx context.Context, sessionID string) error {
-	return r.queries.RevokeRefreshTokensBySession(ctx, sessionID)
+	return r.q(ctx).RevokeRefreshTokensBySession(ctx, sessionID)
 }

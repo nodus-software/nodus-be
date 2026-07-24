@@ -27,7 +27,7 @@ func (q *Queries) AddRolePermission(ctx context.Context, arg AddRolePermissionPa
 const createRole = `-- name: CreateRole :one
 INSERT INTO roles (id, name, description, is_superuser_role, requires_provider_identifier)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at
+RETURNING id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id
 `
 
 type CreateRoleParams struct {
@@ -55,6 +55,7 @@ func (q *Queries) CreateRole(ctx context.Context, arg CreateRoleParams) (Role, e
 		&i.RequiresProviderIdentifier,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
@@ -84,7 +85,7 @@ func (q *Queries) GetPermissionsByCodes(ctx context.Context, codes []string) ([]
 }
 
 const getRoleByID = `-- name: GetRoleByID :one
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at FROM roles WHERE id = $1
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id = $1
 `
 
 func (q *Queries) GetRoleByID(ctx context.Context, id string) (Role, error) {
@@ -98,12 +99,13 @@ func (q *Queries) GetRoleByID(ctx context.Context, id string) (Role, error) {
 		&i.RequiresProviderIdentifier,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getRolesByIDs = `-- name: GetRolesByIDs :many
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at FROM roles WHERE id::text = ANY($1::text[])
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id::text = ANY($1::text[])
 `
 
 func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, error) {
@@ -123,6 +125,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 			&i.RequiresProviderIdentifier,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}
@@ -150,7 +153,7 @@ func (q *Queries) HasSuperuserRole(ctx context.Context, userID string) (bool, er
 }
 
 const listRolesWithPermissions = `-- name: ListRolesWithPermissions :many
-SELECT r.id, r.name, r.description, r.is_superuser_role, r.requires_provider_identifier,
+SELECT r.id, r.tenant_id, r.name, r.description, r.is_superuser_role, r.requires_provider_identifier,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes
 FROM roles r
 LEFT JOIN role_permissions rp ON rp.role_id = r.id
@@ -161,6 +164,7 @@ ORDER BY r.name
 
 type ListRolesWithPermissionsRow struct {
 	ID                         string   `json:"id"`
+	TenantID                   string   `json:"tenant_id"`
 	Name                       string   `json:"name"`
 	Description                string   `json:"description"`
 	IsSuperuserRole            bool     `json:"is_superuser_role"`
@@ -179,6 +183,7 @@ func (q *Queries) ListRolesWithPermissions(ctx context.Context) ([]ListRolesWith
 		var i ListRolesWithPermissionsRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.TenantID,
 			&i.Name,
 			&i.Description,
 			&i.IsSuperuserRole,

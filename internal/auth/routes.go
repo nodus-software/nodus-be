@@ -17,13 +17,17 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Post("/auth/password/reset/confirm", h.ConfirmPasswordReset)
 
 	r.Group(func(r chi.Router) {
+		r.Use(middleware.AuthenticateSessionOrEnrollment(h.jwtSecret, h.service, h.service))
+		r.Post("/auth/mfa/totp/setup", h.SetupTOTP)
+		r.Post("/auth/mfa/totp/confirm", h.ConfirmTOTP)
+	})
+
+	r.Group(func(r chi.Router) {
 		r.Use(middleware.Authenticate(h.jwtSecret, h.service))
 
 		r.Post("/auth/logout", h.Logout)
 		r.Get("/auth/me", h.Me)
 
-		r.Post("/auth/mfa/totp/setup", h.SetupTOTP)
-		r.Post("/auth/mfa/totp/confirm", h.ConfirmTOTP)
 		r.Post("/auth/mfa/biometric/register", h.RegisterBiometric)
 		r.Get("/auth/mfa/factors", h.ListFactors)
 		r.Delete("/auth/mfa/factors/{factorId}", h.RemoveFactor)

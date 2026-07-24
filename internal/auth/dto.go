@@ -35,6 +35,7 @@ type RefreshRequest struct {
 
 type UserProfileResponse struct {
 	ID                  string     `json:"id"`
+	TenantID            string     `json:"tenant_id"`
 	FullName            string     `json:"full_name"`
 	Username            string     `json:"username"`
 	Email               string     `json:"email"`
@@ -94,6 +95,7 @@ type ConfirmPasswordResetRequest struct {
 
 type SessionResponse struct {
 	ID           string    `json:"id"`
+	TenantID     string    `json:"tenant_id"`
 	DeviceLabel  string    `json:"device_label"`
 	IPAddress    string    `json:"ip_address"`
 	CreatedAt    time.Time `json:"created_at"`

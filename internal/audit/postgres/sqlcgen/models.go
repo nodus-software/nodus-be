@@ -95,6 +95,49 @@ func (ns NullMfaFactorType) Value() (driver.Value, error) {
 	return string(ns.MfaFactorType), nil
 }
 
+type OrganizationStatus string
+
+const (
+	OrganizationStatusPending   OrganizationStatus = "pending"
+	OrganizationStatusActive    OrganizationStatus = "active"
+	OrganizationStatusSuspended OrganizationStatus = "suspended"
+)
+
+func (e *OrganizationStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = OrganizationStatus(s)
+	case string:
+		*e = OrganizationStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for OrganizationStatus: %T", src)
+	}
+	return nil
+}
+
+type NullOrganizationStatus struct {
+	OrganizationStatus OrganizationStatus `json:"organization_status"`
+	Valid              bool               `json:"valid"` // Valid is true if OrganizationStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullOrganizationStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.OrganizationStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.OrganizationStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullOrganizationStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.OrganizationStatus), nil
+}
+
 type UserStatus string
 
 const (
@@ -149,6 +192,7 @@ type AuditLog struct {
 	Result         AuditResult        `json:"result"`
 	Metadata       []byte             `json:"metadata"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	TenantID       string             `json:"tenant_id"`
 }
 
 type EnrollmentToken struct {
@@ -158,6 +202,7 @@ type EnrollmentToken struct {
 	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 	ConsumedAt pgtype.Timestamptz `json:"consumed_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	TenantID   string             `json:"tenant_id"`
 }
 
 type Invitation struct {
@@ -168,6 +213,7 @@ type Invitation struct {
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	TenantID  string             `json:"tenant_id"`
 }
 
 type LoginChallenge struct {
@@ -177,6 +223,7 @@ type LoginChallenge struct {
 	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
 	ConsumedAt         pgtype.Timestamptz `json:"consumed_at"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	TenantID           string             `json:"tenant_id"`
 }
 
 type MfaBackupCode struct {
@@ -185,6 +232,7 @@ type MfaBackupCode struct {
 	CodeHash  string             `json:"code_hash"`
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	TenantID  string             `json:"tenant_id"`
 }
 
 type MfaFactor struct {
@@ -196,6 +244,26 @@ type MfaFactor struct {
 	PublicKey       *string            `json:"public_key"`
 	ConfirmedAt     pgtype.Timestamptz `json:"confirmed_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	TenantID        string             `json:"tenant_id"`
+}
+
+type Organization struct {
+	ID               string             `json:"id"`
+	OrganizationName string             `json:"organization_name"`
+	Slug             string             `json:"slug"`
+	Status           OrganizationStatus `json:"status"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OrganizationActivationToken struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	UserID    string             `json:"user_id"`
+	TokenHash string             `json:"token_hash"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type PasswordResetAttempt struct {
@@ -203,6 +271,7 @@ type PasswordResetAttempt struct {
 	UsernameAttempted string             `json:"username_attempted"`
 	IpAddress         string             `json:"ip_address"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	TenantID          string             `json:"tenant_id"`
 }
 
 type PasswordResetToken struct {
@@ -212,6 +281,7 @@ type PasswordResetToken struct {
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	TenantID  string             `json:"tenant_id"`
 }
 
 type Permission struct {
@@ -228,6 +298,7 @@ type RefreshToken struct {
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	TenantID  string             `json:"tenant_id"`
 }
 
 type Role struct {
@@ -238,11 +309,13 @@ type Role struct {
 	RequiresProviderIdentifier bool               `json:"requires_provider_identifier"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	TenantID                   string             `json:"tenant_id"`
 }
 
 type RolePermission struct {
 	RoleID       string `json:"role_id"`
 	PermissionID string `json:"permission_id"`
+	TenantID     string `json:"tenant_id"`
 }
 
 type Session struct {
@@ -254,6 +327,7 @@ type Session struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	LastActiveAt pgtype.Timestamptz `json:"last_active_at"`
 	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
+	TenantID     string             `json:"tenant_id"`
 }
 
 type User struct {
@@ -271,10 +345,12 @@ type User struct {
 	NextAccessReviewDue pgtype.Timestamptz `json:"next_access_review_due"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	TenantID            string             `json:"tenant_id"`
 }
 
 type UserRole struct {
 	UserID     string             `json:"user_id"`
 	RoleID     string             `json:"role_id"`
 	AssignedAt pgtype.Timestamptz `json:"assigned_at"`
+	TenantID   string             `json:"tenant_id"`
 }

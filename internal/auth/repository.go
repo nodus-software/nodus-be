@@ -55,6 +55,8 @@ type Repository interface {
 	CreateMFABackupCode(ctx context.Context, id, userID, codeHash string) error
 	GetUnusedMFABackupCodeIDByHash(ctx context.Context, userID, codeHash string) (string, error)
 	ConsumeMFABackupCode(ctx context.Context, id string) error
+	GetEnrollmentTokenByHash(ctx context.Context, tokenHash string) (id, userID string, expiresAt time.Time, consumed bool, err error)
+	ConsumeEnrollmentToken(ctx context.Context, id string) error
 
 	GetRolesByUser(ctx context.Context, userID string) ([]Role, error)
 	GetEffectivePermissionsByUser(ctx context.Context, userID string) ([]string, error)

@@ -245,6 +245,11 @@ type backupCode struct {
 	userID, hash string
 	used         bool
 }
+type enrollmentToken struct {
+	id, userID, hash string
+	expiresAt        time.Time
+	consumed         bool
+}
 type memoryRepo struct {
 	sync.Mutex
 	users       map[string]auth.User
@@ -257,11 +262,12 @@ type memoryRepo struct {
 	attempts    []resetAttempt
 	roles       map[string][]auth.Role
 	permissions map[string][]string
+	enrollments map[string]enrollmentToken
 	key         [32]byte
 }
 
 func newMemoryRepo() *memoryRepo {
-	r := &memoryRepo{users: map[string]auth.User{}, challenges: map[string]auth.LoginChallenge{}, sessions: map[string]auth.Session{}, refresh: map[string]auth.RefreshToken{}, resets: map[string]auth.PasswordResetToken{}, factors: map[string]auth.MFAFactor{}, backup: map[string]backupCode{}, roles: map[string][]auth.Role{}, permissions: map[string][]string{}}
+	r := &memoryRepo{users: map[string]auth.User{}, challenges: map[string]auth.LoginChallenge{}, sessions: map[string]auth.Session{}, refresh: map[string]auth.RefreshToken{}, resets: map[string]auth.PasswordResetToken{}, factors: map[string]auth.MFAFactor{}, backup: map[string]backupCode{}, roles: map[string][]auth.Role{}, permissions: map[string][]string{}, enrollments: map[string]enrollmentToken{}}
 	copy(r.key[:], "test-only-mfa-encryption-key-32!")
 	return r
 }
@@ -572,6 +578,23 @@ func (r *memoryRepo) ConsumeMFABackupCode(_ context.Context, id string) error {
 	}
 	b.used = true
 	r.backup[id] = b
+	return nil
+}
+func (r *memoryRepo) GetEnrollmentTokenByHash(_ context.Context, hash string) (string, string, time.Time, bool, error) {
+	for _, token := range r.enrollments {
+		if token.hash == hash {
+			return token.id, token.userID, token.expiresAt, token.consumed, nil
+		}
+	}
+	return "", "", time.Time{}, false, auth.ErrEnrollmentTokenInvalid
+}
+func (r *memoryRepo) ConsumeEnrollmentToken(_ context.Context, id string) error {
+	token, ok := r.enrollments[id]
+	if !ok {
+		return auth.ErrEnrollmentTokenInvalid
+	}
+	token.consumed = true
+	r.enrollments[id] = token
 	return nil
 }
 func (r *memoryRepo) GetRolesByUser(_ context.Context, uid string) ([]auth.Role, error) {

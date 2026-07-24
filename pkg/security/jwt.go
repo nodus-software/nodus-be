@@ -26,10 +26,11 @@ var (
 type AccessClaims struct {
 	jwt.RegisteredClaims
 	SessionID string `json:"session_id"`
+	TenantID  string `json:"tid"`
 }
 
 // IssueAccessToken signs a new short-lived access token for userID/sessionID.
-func IssueAccessToken(secret string, ttl time.Duration, userID, sessionID string) (token string, expiresAt time.Time, err error) {
+func IssueAccessToken(secret string, ttl time.Duration, userID, sessionID string, tenantIDs ...string) (token string, expiresAt time.Time, err error) {
 	jti, err := utility.GenerateUUID()
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("generate jti: %w", err)
@@ -47,6 +48,9 @@ func IssueAccessToken(secret string, ttl time.Duration, userID, sessionID string
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 		SessionID: sessionID,
+	}
+	if len(tenantIDs) > 0 {
+		claims.TenantID = tenantIDs[0]
 	}
 
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))

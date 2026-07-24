@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -19,7 +20,7 @@ func mfaFactorFromRow(f sqlcgen.MfaFactor) *auth.MFAFactor {
 }
 
 func (r *Repository) CreateMFAFactor(ctx context.Context, factor auth.MFAFactor) (*auth.MFAFactor, error) {
-	created, err := r.queries.CreateMFAFactor(ctx, sqlcgen.CreateMFAFactorParams{
+	created, err := r.q(ctx).CreateMFAFactor(ctx, sqlcgen.CreateMFAFactorParams{
 		ID: factor.ID, UserID: factor.UserID, Type: sqlcgen.MfaFactorType(factor.Type),
 		Label: factor.Label, SecretEncrypted: factor.SecretEncrypted, PublicKey: factor.PublicKey,
 		ConfirmedAt: toNullTimestamptz(factor.ConfirmedAt),
@@ -31,7 +32,7 @@ func (r *Repository) CreateMFAFactor(ctx context.Context, factor auth.MFAFactor)
 }
 
 func (r *Repository) GetMFAFactorByID(ctx context.Context, id string) (*auth.MFAFactor, error) {
-	f, err := r.queries.GetMFAFactorByID(ctx, id)
+	f, err := r.q(ctx).GetMFAFactorByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrFactorNotFound
@@ -42,7 +43,7 @@ func (r *Repository) GetMFAFactorByID(ctx context.Context, id string) (*auth.MFA
 }
 
 func (r *Repository) ListMFAFactorsByUser(ctx context.Context, userID string) ([]auth.MFAFactor, error) {
-	rows, err := r.queries.ListMFAFactorsByUser(ctx, userID)
+	rows, err := r.q(ctx).ListMFAFactorsByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -54,26 +55,26 @@ func (r *Repository) ListMFAFactorsByUser(ctx context.Context, userID string) ([
 }
 
 func (r *Repository) ConfirmMFAFactor(ctx context.Context, id string) error {
-	return r.queries.ConfirmMFAFactor(ctx, id)
+	return r.q(ctx).ConfirmMFAFactor(ctx, id)
 }
 
 func (r *Repository) DeleteMFAFactor(ctx context.Context, id string) error {
-	return r.queries.DeleteMFAFactor(ctx, id)
+	return r.q(ctx).DeleteMFAFactor(ctx, id)
 }
 
 func (r *Repository) CountConfirmedMFAFactors(ctx context.Context, userID string) (int, error) {
-	n, err := r.queries.CountConfirmedMFAFactors(ctx, userID)
+	n, err := r.q(ctx).CountConfirmedMFAFactors(ctx, userID)
 	return int(n), err
 }
 
 func (r *Repository) CreateMFABackupCode(ctx context.Context, id, userID, codeHash string) error {
-	return r.queries.CreateMFABackupCode(ctx, sqlcgen.CreateMFABackupCodeParams{
+	return r.q(ctx).CreateMFABackupCode(ctx, sqlcgen.CreateMFABackupCodeParams{
 		ID: id, UserID: userID, CodeHash: codeHash,
 	})
 }
 
 func (r *Repository) GetUnusedMFABackupCodeIDByHash(ctx context.Context, userID, codeHash string) (string, error) {
-	code, err := r.queries.GetUnusedMFABackupCodeByHash(ctx, sqlcgen.GetUnusedMFABackupCodeByHashParams{
+	code, err := r.q(ctx).GetUnusedMFABackupCodeByHash(ctx, sqlcgen.GetUnusedMFABackupCodeByHashParams{
 		UserID: userID, CodeHash: codeHash,
 	})
 	if err != nil {
@@ -86,5 +87,17 @@ func (r *Repository) GetUnusedMFABackupCodeIDByHash(ctx context.Context, userID,
 }
 
 func (r *Repository) ConsumeMFABackupCode(ctx context.Context, id string) error {
-	return r.queries.ConsumeMFABackupCode(ctx, id)
+	return r.q(ctx).ConsumeMFABackupCode(ctx, id)
+}
+
+func (r *Repository) GetEnrollmentTokenByHash(ctx context.Context, tokenHash string) (string, string, time.Time, bool, error) {
+	token, err := r.q(ctx).GetEnrollmentTokenByHash(ctx, tokenHash)
+	if err != nil {
+		return "", "", time.Time{}, false, err
+	}
+	return token.ID, token.UserID, fromTimestamptz(token.ExpiresAt), token.Consumed, nil
+}
+
+func (r *Repository) ConsumeEnrollmentToken(ctx context.Context, id string) error {
+	return r.q(ctx).ConsumeEnrollmentToken(ctx, id)
 }

@@ -20,8 +20,18 @@ func New(pool *pgxpool.Pool) *Repository {
 	return &Repository{queries: sqlcgen.New(pool), pool: pool}
 }
 
+func (r *Repository) q(ctx context.Context) *sqlcgen.Queries {
+	if executor, ok := db.Executor(ctx); ok {
+		return sqlcgen.New(executor)
+	}
+	return r.queries
+}
+
 // WithinTx runs fn against a Repository bound to a single transaction.
 func (r *Repository) WithinTx(ctx context.Context, fn func(invitation.Repository) error) error {
+	if executor, ok := db.Executor(ctx); ok {
+		return fn(&Repository{queries: sqlcgen.New(executor), pool: r.pool})
+	}
 	return db.RunInTx(ctx, r.pool, func(tx pgx.Tx) *Repository {
 		return &Repository{queries: sqlcgen.New(tx), pool: r.pool}
 	}, func(txRepo *Repository) error {

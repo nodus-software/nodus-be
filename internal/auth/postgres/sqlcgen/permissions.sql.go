@@ -38,7 +38,7 @@ func (q *Queries) GetEffectivePermissionsByUser(ctx context.Context, userID stri
 }
 
 const getRolesByUser = `-- name: GetRolesByUser :many
-SELECT r.id, r.name, r.description, r.is_superuser_role, r.requires_provider_identifier, r.created_at, r.updated_at FROM roles r
+SELECT r.id, r.name, r.description, r.is_superuser_role, r.requires_provider_identifier, r.created_at, r.updated_at, r.tenant_id FROM roles r
 JOIN user_roles ur ON ur.role_id = r.id
 WHERE ur.user_id = $1
 ORDER BY r.name
@@ -61,6 +61,7 @@ func (q *Queries) GetRolesByUser(ctx context.Context, userID string) ([]Role, er
 			&i.RequiresProviderIdentifier,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}

@@ -23,6 +23,7 @@ type Role struct {
 
 type User struct {
 	ID                  string
+	TenantID            string
 	FullName            string
 	Username            string
 	Email               string

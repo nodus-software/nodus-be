@@ -11,6 +11,7 @@ import (
 	"github.com/pquerna/otp/totp"
 
 	"nodus-health/internal/audit"
+	"nodus-health/internal/tenant"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
 	"nodus-health/pkg/utility"
@@ -291,7 +292,8 @@ func (s *Service) establishSession(ctx context.Context, user *User, challenge *L
 			return err
 		}
 
-		accessToken, accessExpiry, err := security.IssueAccessToken(s.cfg.JWTSecret, s.cfg.AccessTokenTTL, user.ID, sessionID)
+		tenantID, _ := tenant.ID(ctx)
+		accessToken, accessExpiry, err := security.IssueAccessToken(s.cfg.JWTSecret, s.cfg.AccessTokenTTL, user.ID, sessionID, tenantID)
 		if err != nil {
 			return err
 		}
@@ -361,7 +363,8 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (*TokenPairRe
 			return err
 		}
 
-		access, expiry, err := security.IssueAccessToken(s.cfg.JWTSecret, s.cfg.AccessTokenTTL, token.UserID, token.SessionID)
+		tenantID, _ := tenant.ID(ctx)
+		access, expiry, err := security.IssueAccessToken(s.cfg.JWTSecret, s.cfg.AccessTokenTTL, token.UserID, token.SessionID, tenantID)
 		if err != nil {
 			return err
 		}
@@ -419,7 +422,7 @@ func (s *Service) Me(ctx context.Context, userID string) (*UserProfileResponse, 
 	}
 
 	return &UserProfileResponse{
-		ID: user.ID, FullName: user.FullName, Username: user.Username, Email: user.Email,
+		ID: user.ID, TenantID: user.TenantID, FullName: user.FullName, Username: user.Username, Email: user.Email,
 		ProviderIdentifier: user.ProviderIdentifier, Roles: roleNames, Permissions: perms,
 		Status: string(user.Status), MFAEnrolled: mfaEnrolled,
 		LastAccessReviewAt: user.LastAccessReviewAt, NextAccessReviewDue: user.NextAccessReviewDue,
@@ -472,6 +475,18 @@ func (s *Service) SetupTOTP(ctx context.Context, userID string) (*TOTPSetupRespo
 	}
 
 	return &TOTPSetupResponse{Secret: key.Secret(), QRCodeURI: key.URL(), BackupCodes: backupCodes}, nil
+}
+
+func (s *Service) ResolveEnrollmentToken(ctx context.Context, rawToken string) (string, string, error) {
+	id, userID, expiresAt, consumed, err := s.repo.GetEnrollmentTokenByHash(ctx, security.HashToken(rawToken))
+	if err != nil || consumed || !expiresAt.After(time.Now()) {
+		return "", "", ErrEnrollmentTokenInvalid
+	}
+	return id, userID, nil
+}
+
+func (s *Service) ConsumeEnrollmentToken(ctx context.Context, id string) error {
+	return s.repo.ConsumeEnrollmentToken(ctx, id)
 }
 
 // ConfirmTOTP verifies the initial code and activates the pending factor.
@@ -733,7 +748,7 @@ func (s *Service) ListSessions(ctx context.Context, userID, currentSessionID str
 	resp := make([]SessionResponse, 0, len(sessions))
 	for _, sess := range sessions {
 		resp = append(resp, SessionResponse{
-			ID: sess.ID, DeviceLabel: sess.DeviceLabel, IPAddress: sess.IPAddress,
+			ID: sess.ID, TenantID: sess.TenantID, DeviceLabel: sess.DeviceLabel, IPAddress: sess.IPAddress,
 			CreatedAt: sess.CreatedAt, LastActiveAt: sess.LastActiveAt, Current: sess.ID == currentSessionID,
 		})
 	}
@@ -754,6 +769,15 @@ func (s *Service) Authorize(ctx context.Context, userID, sessionID string) ([]st
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil || user.Status != UserStatusActive {
 		return nil, ErrUserNotFound
+	}
+	roles, err := s.repo.GetRolesByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, role := range roles {
+		if role.IsSuperuserRole {
+			return []string{"*"}, nil
+		}
 	}
 
 	return s.repo.GetEffectivePermissionsByUser(ctx, userID)

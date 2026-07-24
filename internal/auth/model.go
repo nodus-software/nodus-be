@@ -13,6 +13,7 @@ const (
 
 type User struct {
 	ID                  string
+	TenantID            string
 	FullName            string
 	Username            string
 	Email               string
@@ -74,6 +75,7 @@ func (c *LoginChallenge) IsConsumed() bool             { return c.ConsumedAt != 
 
 type Session struct {
 	ID           string
+	TenantID     string
 	UserID       string
 	DeviceLabel  string
 	IPAddress    string

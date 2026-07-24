@@ -13,6 +13,7 @@ type ListUsersFilter struct {
 
 type UserProfileResponse struct {
 	ID                  string     `json:"id"`
+	TenantID            string     `json:"tenant_id"`
 	FullName            string     `json:"full_name"`
 	Username            string     `json:"username"`
 	Email               string     `json:"email"`
@@ -27,7 +28,7 @@ type UserProfileResponse struct {
 
 func toUserProfileResponse(u User) UserProfileResponse {
 	return UserProfileResponse{
-		ID: u.ID, FullName: u.FullName, Username: u.Username, Email: u.Email,
+		ID: u.ID, TenantID: u.TenantID, FullName: u.FullName, Username: u.Username, Email: u.Email,
 		ProviderIdentifier: u.ProviderIdentifier, Roles: u.RoleNames, Permissions: u.Permissions,
 		Status: string(u.Status), MFAEnrolled: u.MFAEnrolled,
 		LastAccessReviewAt: u.LastAccessReviewAt, NextAccessReviewDue: u.NextAccessReviewDue,

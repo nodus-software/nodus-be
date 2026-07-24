@@ -7,7 +7,7 @@ import (
 )
 
 func (r *Repository) GetRolesByUser(ctx context.Context, userID string) ([]auth.Role, error) {
-	rows, err := r.queries.GetRolesByUser(ctx, userID)
+	rows, err := r.q(ctx).GetRolesByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -22,7 +22,7 @@ func (r *Repository) GetRolesByUser(ctx context.Context, userID string) ([]auth.
 }
 
 func (r *Repository) GetEffectivePermissionsByUser(ctx context.Context, userID string) ([]string, error) {
-	perms, err := r.queries.GetEffectivePermissionsByUser(ctx, userID)
+	perms, err := r.q(ctx).GetEffectivePermissionsByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}

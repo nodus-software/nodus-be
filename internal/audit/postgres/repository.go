@@ -9,6 +9,7 @@ import (
 
 	"nodus-health/internal/audit"
 	"nodus-health/internal/audit/postgres/sqlcgen"
+	"nodus-health/internal/platform/db"
 )
 
 type Repository struct {
@@ -19,13 +20,20 @@ func New(pool *pgxpool.Pool) *Repository {
 	return &Repository{queries: sqlcgen.New(pool)}
 }
 
+func (r *Repository) q(ctx context.Context) *sqlcgen.Queries {
+	if executor, ok := db.Executor(ctx); ok {
+		return sqlcgen.New(executor)
+	}
+	return r.queries
+}
+
 func (r *Repository) Insert(ctx context.Context, entry audit.Entry) error {
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
 		return err
 	}
 
-	return r.queries.InsertAuditLog(ctx, sqlcgen.InsertAuditLogParams{
+	return r.q(ctx).InsertAuditLog(ctx, sqlcgen.InsertAuditLogParams{
 		ID:             entry.ID,
 		Timestamp:      pgtype.Timestamptz{Time: entry.Timestamp, Valid: true},
 		UserID:         entry.UserID,
@@ -46,7 +54,7 @@ func (r *Repository) List(ctx context.Context, filter audit.Filter, limit int) (
 		to = pgtype.Timestamptz{Time: *filter.To, Valid: true}
 	}
 
-	rows, err := r.queries.ListAuditLogs(ctx, sqlcgen.ListAuditLogsParams{
+	rows, err := r.q(ctx).ListAuditLogs(ctx, sqlcgen.ListAuditLogsParams{
 		Limit: int32(limit), UserID: filter.UserID, Action: filter.Action, FromTs: from, ToTs: to,
 	})
 	if err != nil {
@@ -62,7 +70,7 @@ func (r *Repository) List(ctx context.Context, filter audit.Filter, limit int) (
 			}
 		}
 		out = append(out, audit.Entry{
-			ID: row.ID, Timestamp: row.Timestamp.Time, UserID: row.UserID, Action: row.Action,
+			ID: row.ID, TenantID: row.TenantID, Timestamp: row.Timestamp.Time, UserID: row.UserID, Action: row.Action,
 			TargetResource: row.TargetResource, IPAddress: row.IpAddress,
 			Result: audit.Result(row.Result), Metadata: metadata,
 		})

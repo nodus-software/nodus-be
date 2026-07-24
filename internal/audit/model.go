@@ -15,6 +15,7 @@ const (
 // for these records anywhere in the codebase.
 type Entry struct {
 	ID             string
+	TenantID       string
 	Timestamp      time.Time
 	UserID         *string // nil when the actor is unknown/unauthenticated (e.g. a reset request for a non-existent username)
 	Action         string

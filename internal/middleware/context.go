@@ -8,9 +8,11 @@ type authContextKey struct{}
 // AuthContext is what the Authenticate middleware injects into the request
 // context once a bearer token has been validated.
 type AuthContext struct {
-	UserID      string
-	SessionID   string
-	Permissions []string
+	UserID            string
+	SessionID         string
+	TenantID          string
+	Permissions       []string
+	EnrollmentTokenID string
 }
 
 func withRequestID(ctx context.Context, id string) context.Context {

@@ -20,6 +20,16 @@ func (q *Queries) ConfirmMFAFactor(ctx context.Context, id string) error {
 	return err
 }
 
+const consumeEnrollmentToken = `-- name: ConsumeEnrollmentToken :exec
+UPDATE enrollment_tokens SET consumed_at = now()
+WHERE id = $1 AND consumed_at IS NULL
+`
+
+func (q *Queries) ConsumeEnrollmentToken(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, consumeEnrollmentToken, id)
+	return err
+}
+
 const consumeMFABackupCode = `-- name: ConsumeMFABackupCode :exec
 UPDATE mfa_backup_codes SET used_at = now() WHERE id = $1
 `
@@ -59,7 +69,7 @@ func (q *Queries) CreateMFABackupCode(ctx context.Context, arg CreateMFABackupCo
 const createMFAFactor = `-- name: CreateMFAFactor :one
 INSERT INTO mfa_factors (id, user_id, type, label, secret_encrypted, public_key, confirmed_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, user_id, type, label, secret_encrypted, public_key, confirmed_at, created_at
+RETURNING id, user_id, type, label, secret_encrypted, public_key, confirmed_at, created_at, tenant_id
 `
 
 type CreateMFAFactorParams struct {
@@ -92,6 +102,7 @@ func (q *Queries) CreateMFAFactor(ctx context.Context, arg CreateMFAFactorParams
 		&i.PublicKey,
 		&i.ConfirmedAt,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
@@ -105,8 +116,34 @@ func (q *Queries) DeleteMFAFactor(ctx context.Context, id string) error {
 	return err
 }
 
+const getEnrollmentTokenByHash = `-- name: GetEnrollmentTokenByHash :one
+SELECT id::text, user_id::text, expires_at,
+       CASE WHEN consumed_at IS NULL THEN false ELSE true END::boolean AS consumed
+FROM enrollment_tokens
+WHERE token_hash = $1
+`
+
+type GetEnrollmentTokenByHashRow struct {
+	ID        string             `json:"id"`
+	UserID    string             `json:"user_id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	Consumed  bool               `json:"consumed"`
+}
+
+func (q *Queries) GetEnrollmentTokenByHash(ctx context.Context, tokenHash string) (GetEnrollmentTokenByHashRow, error) {
+	row := q.db.QueryRow(ctx, getEnrollmentTokenByHash, tokenHash)
+	var i GetEnrollmentTokenByHashRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ExpiresAt,
+		&i.Consumed,
+	)
+	return i, err
+}
+
 const getMFAFactorByID = `-- name: GetMFAFactorByID :one
-SELECT id, user_id, type, label, secret_encrypted, public_key, confirmed_at, created_at FROM mfa_factors WHERE id = $1
+SELECT id, user_id, type, label, secret_encrypted, public_key, confirmed_at, created_at, tenant_id FROM mfa_factors WHERE id = $1
 `
 
 func (q *Queries) GetMFAFactorByID(ctx context.Context, id string) (MfaFactor, error) {
@@ -121,12 +158,13 @@ func (q *Queries) GetMFAFactorByID(ctx context.Context, id string) (MfaFactor, e
 		&i.PublicKey,
 		&i.ConfirmedAt,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getUnusedMFABackupCodeByHash = `-- name: GetUnusedMFABackupCodeByHash :one
-SELECT id, user_id, code_hash, used_at, created_at FROM mfa_backup_codes WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL
+SELECT id, user_id, code_hash, used_at, created_at, tenant_id FROM mfa_backup_codes WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL
 `
 
 type GetUnusedMFABackupCodeByHashParams struct {
@@ -143,12 +181,13 @@ func (q *Queries) GetUnusedMFABackupCodeByHash(ctx context.Context, arg GetUnuse
 		&i.CodeHash,
 		&i.UsedAt,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const listMFAFactorsByUser = `-- name: ListMFAFactorsByUser :many
-SELECT id, user_id, type, label, secret_encrypted, public_key, confirmed_at, created_at FROM mfa_factors WHERE user_id = $1 ORDER BY created_at
+SELECT id, user_id, type, label, secret_encrypted, public_key, confirmed_at, created_at, tenant_id FROM mfa_factors WHERE user_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListMFAFactorsByUser(ctx context.Context, userID string) ([]MfaFactor, error) {
@@ -169,6 +208,7 @@ func (q *Queries) ListMFAFactorsByUser(ctx context.Context, userID string) ([]Mf
 			&i.PublicKey,
 			&i.ConfirmedAt,
 			&i.CreatedAt,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}

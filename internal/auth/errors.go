@@ -24,6 +24,7 @@ var (
 	ErrSessionNotFound         = errors.New("session not found")
 	ErrUserNotFound            = errors.New("user not found")
 	ErrPermissionDenied        = errors.New("permission denied")
+	ErrEnrollmentTokenInvalid  = errors.New("enrollment token invalid, expired, or already used")
 )
 
 // LockedError wraps ErrAccountLocked with the lockout expiry so the handler

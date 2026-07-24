@@ -21,7 +21,7 @@ func (q *Queries) DeleteUserRoles(ctx context.Context, userID string) error {
 }
 
 const getRolesByIDs = `-- name: GetRolesByIDs :many
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at FROM roles WHERE id::text = ANY($1::text[])
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id::text = ANY($1::text[])
 `
 
 func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, error) {
@@ -41,6 +41,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 			&i.RequiresProviderIdentifier,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}
@@ -53,7 +54,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at FROM users WHERE id = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
@@ -74,12 +75,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.NextAccessReviewDue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getUserWithRolesByID = `-- name: GetUserWithRolesByID :one
-SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at,
+SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id,
     COALESCE(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}')::text[] AS role_names,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
@@ -109,6 +111,7 @@ type GetUserWithRolesByIDRow struct {
 	NextAccessReviewDue pgtype.Timestamptz `json:"next_access_review_due"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	TenantID            string             `json:"tenant_id"`
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
@@ -132,6 +135,7 @@ func (q *Queries) GetUserWithRolesByID(ctx context.Context, id string) (GetUserW
 		&i.NextAccessReviewDue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 		&i.RoleNames,
 		&i.PermissionCodes,
 		&i.MfaEnrolled,
@@ -169,7 +173,7 @@ func (q *Queries) InsertUserRole(ctx context.Context, arg InsertUserRoleParams) 
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at,
+SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id,
     COALESCE(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}')::text[] AS role_names,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
@@ -213,6 +217,7 @@ type ListUsersRow struct {
 	NextAccessReviewDue pgtype.Timestamptz `json:"next_access_review_due"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	TenantID            string             `json:"tenant_id"`
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
@@ -242,6 +247,7 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 			&i.NextAccessReviewDue,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TenantID,
 			&i.RoleNames,
 			&i.PermissionCodes,
 			&i.MfaEnrolled,

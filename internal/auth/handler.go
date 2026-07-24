@@ -188,6 +188,12 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
+	if ac.EnrollmentTokenID != "" {
+		if err := h.service.ConsumeEnrollmentToken(r.Context(), ac.EnrollmentTokenID); err != nil {
+			h.writeError(w, err)
+			return
+		}
+	}
 	response.OK(w, map[string]string{"status": "enabled"})
 }
 

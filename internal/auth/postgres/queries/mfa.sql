@@ -27,3 +27,13 @@ SELECT * FROM mfa_backup_codes WHERE user_id = $1 AND code_hash = $2 AND used_at
 
 -- name: ConsumeMFABackupCode :exec
 UPDATE mfa_backup_codes SET used_at = now() WHERE id = $1;
+
+-- name: GetEnrollmentTokenByHash :one
+SELECT id::text, user_id::text, expires_at,
+       CASE WHEN consumed_at IS NULL THEN false ELSE true END::boolean AS consumed
+FROM enrollment_tokens
+WHERE token_hash = $1;
+
+-- name: ConsumeEnrollmentToken :exec
+UPDATE enrollment_tokens SET consumed_at = now()
+WHERE id = $1 AND consumed_at IS NULL;

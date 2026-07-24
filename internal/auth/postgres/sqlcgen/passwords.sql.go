@@ -77,7 +77,7 @@ func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswo
 }
 
 const getPasswordResetTokenByHash = `-- name: GetPasswordResetTokenByHash :one
-SELECT id, user_id, token_hash, expires_at, used_at, created_at FROM password_reset_tokens WHERE token_hash = $1
+SELECT id, user_id, token_hash, expires_at, used_at, created_at, tenant_id FROM password_reset_tokens WHERE token_hash = $1
 `
 
 func (q *Queries) GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (PasswordResetToken, error) {
@@ -90,6 +90,7 @@ func (q *Queries) GetPasswordResetTokenByHash(ctx context.Context, tokenHash str
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }

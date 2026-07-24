@@ -1,5 +1,5 @@
 -- name: ListRolesWithPermissions :many
-SELECT r.id, r.name, r.description, r.is_superuser_role, r.requires_provider_identifier,
+SELECT r.id, r.tenant_id, r.name, r.description, r.is_superuser_role, r.requires_provider_identifier,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes
 FROM roles r
 LEFT JOIN role_permissions rp ON rp.role_id = r.id

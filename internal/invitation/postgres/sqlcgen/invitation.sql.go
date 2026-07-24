@@ -97,7 +97,7 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 const createInvitedUser = `-- name: CreateInvitedUser :one
 INSERT INTO users (id, full_name, username, email, provider_identifier, status)
 VALUES ($1, $2, $3, $4, $5, 'invited')
-RETURNING id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at
+RETURNING id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id
 `
 
 type CreateInvitedUserParams struct {
@@ -132,12 +132,13 @@ func (q *Queries) CreateInvitedUser(ctx context.Context, arg CreateInvitedUserPa
 		&i.NextAccessReviewDue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getInvitationByTokenHash = `-- name: GetInvitationByTokenHash :one
-SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at FROM invitations WHERE token_hash = $1
+SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at, tenant_id FROM invitations WHERE token_hash = $1
 `
 
 func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash string) (Invitation, error) {
@@ -151,12 +152,13 @@ func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash string
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getLatestInvitationByUserID = `-- name: GetLatestInvitationByUserID :one
-SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at FROM invitations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at, tenant_id FROM invitations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestInvitationByUserID(ctx context.Context, userID string) (Invitation, error) {
@@ -170,12 +172,13 @@ func (q *Queries) GetLatestInvitationByUserID(ctx context.Context, userID string
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getRolesByIDs = `-- name: GetRolesByIDs :many
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at FROM roles WHERE id::text = ANY($1::text[])
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id::text = ANY($1::text[])
 `
 
 func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, error) {
@@ -195,6 +198,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 			&i.RequiresProviderIdentifier,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}
@@ -207,7 +211,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at FROM users WHERE email = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -228,12 +232,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.NextAccessReviewDue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at FROM users WHERE id = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
@@ -254,6 +259,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.NextAccessReviewDue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }

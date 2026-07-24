@@ -12,18 +12,18 @@ import (
 )
 
 func (r *Repository) UpdatePasswordHash(ctx context.Context, userID, hash string) error {
-	return r.queries.UpdatePasswordHash(ctx, sqlcgen.UpdatePasswordHashParams{ID: userID, PasswordHash: &hash})
+	return r.q(ctx).UpdatePasswordHash(ctx, sqlcgen.UpdatePasswordHashParams{ID: userID, PasswordHash: &hash})
 }
 
 func (r *Repository) CreatePasswordResetToken(ctx context.Context, token auth.PasswordResetToken) error {
-	return r.queries.CreatePasswordResetToken(ctx, sqlcgen.CreatePasswordResetTokenParams{
+	return r.q(ctx).CreatePasswordResetToken(ctx, sqlcgen.CreatePasswordResetTokenParams{
 		ID: token.ID, UserID: token.UserID, TokenHash: token.TokenHash,
 		ExpiresAt: toTimestamptz(token.ExpiresAt),
 	})
 }
 
 func (r *Repository) GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (*auth.PasswordResetToken, error) {
-	t, err := r.queries.GetPasswordResetTokenByHash(ctx, tokenHash)
+	t, err := r.q(ctx).GetPasswordResetTokenByHash(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrResetTokenInvalid
@@ -38,30 +38,30 @@ func (r *Repository) GetPasswordResetTokenByHash(ctx context.Context, tokenHash 
 }
 
 func (r *Repository) ConsumePasswordResetToken(ctx context.Context, id string) error {
-	return r.queries.ConsumePasswordResetToken(ctx, id)
+	return r.q(ctx).ConsumePasswordResetToken(ctx, id)
 }
 
 func (r *Repository) InvalidateOtherPasswordResetTokens(ctx context.Context, userID, exceptID string) error {
-	return r.queries.InvalidateOtherPasswordResetTokens(ctx, sqlcgen.InvalidateOtherPasswordResetTokensParams{
+	return r.q(ctx).InvalidateOtherPasswordResetTokens(ctx, sqlcgen.InvalidateOtherPasswordResetTokensParams{
 		UserID: userID, ID: exceptID,
 	})
 }
 
 func (r *Repository) RecordPasswordResetAttempt(ctx context.Context, id, usernameAttempted, ip string) error {
-	return r.queries.RecordPasswordResetAttempt(ctx, sqlcgen.RecordPasswordResetAttemptParams{
+	return r.q(ctx).RecordPasswordResetAttempt(ctx, sqlcgen.RecordPasswordResetAttemptParams{
 		ID: id, UsernameAttempted: usernameAttempted, IpAddress: ip,
 	})
 }
 
 func (r *Repository) CountPasswordResetAttemptsByUsername(ctx context.Context, username string, since time.Time) (int, error) {
-	n, err := r.queries.CountPasswordResetAttemptsByUsername(ctx, sqlcgen.CountPasswordResetAttemptsByUsernameParams{
+	n, err := r.q(ctx).CountPasswordResetAttemptsByUsername(ctx, sqlcgen.CountPasswordResetAttemptsByUsernameParams{
 		UsernameAttempted: username, CreatedAt: toTimestamptz(since),
 	})
 	return int(n), err
 }
 
 func (r *Repository) CountPasswordResetAttemptsByIP(ctx context.Context, ip string, since time.Time) (int, error) {
-	n, err := r.queries.CountPasswordResetAttemptsByIP(ctx, sqlcgen.CountPasswordResetAttemptsByIPParams{
+	n, err := r.q(ctx).CountPasswordResetAttemptsByIP(ctx, sqlcgen.CountPasswordResetAttemptsByIPParams{
 		IpAddress: ip, CreatedAt: toTimestamptz(since),
 	})
 	return int(n), err

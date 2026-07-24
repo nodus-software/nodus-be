@@ -17,7 +17,7 @@ func userFromRow(u sqlcgen.User) *auth.User {
 		passwordHash = *u.PasswordHash
 	}
 	return &auth.User{
-		ID: u.ID, FullName: u.FullName, Username: u.Username, Email: u.Email,
+		ID: u.ID, TenantID: u.TenantID, FullName: u.FullName, Username: u.Username, Email: u.Email,
 		PasswordHash: passwordHash, ProviderIdentifier: u.ProviderIdentifier,
 		Status:              auth.UserStatus(u.Status),
 		FailedLoginAttempts: int(u.FailedLoginAttempts),
@@ -31,7 +31,7 @@ func userFromRow(u sqlcgen.User) *auth.User {
 }
 
 func (r *Repository) GetUserByUsername(ctx context.Context, username string) (*auth.User, error) {
-	u, err := r.queries.GetUserByUsername(ctx, username)
+	u, err := r.q(ctx).GetUserByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrUserNotFound
@@ -42,7 +42,7 @@ func (r *Repository) GetUserByUsername(ctx context.Context, username string) (*a
 }
 
 func (r *Repository) GetUserByID(ctx context.Context, id string) (*auth.User, error) {
-	u, err := r.queries.GetUserByID(ctx, id)
+	u, err := r.q(ctx).GetUserByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrUserNotFound
@@ -53,20 +53,20 @@ func (r *Repository) GetUserByID(ctx context.Context, id string) (*auth.User, er
 }
 
 func (r *Repository) IncrementFailedLoginAttempts(ctx context.Context, userID string) (int, error) {
-	n, err := r.queries.IncrementFailedLoginAttempts(ctx, userID)
+	n, err := r.q(ctx).IncrementFailedLoginAttempts(ctx, userID)
 	return int(n), err
 }
 
 func (r *Repository) LockUser(ctx context.Context, userID string, until time.Time) error {
-	return r.queries.LockUser(ctx, sqlcgen.LockUserParams{ID: userID, LockedUntil: toTimestamptz(until)})
+	return r.q(ctx).LockUser(ctx, sqlcgen.LockUserParams{ID: userID, LockedUntil: toTimestamptz(until)})
 }
 
 func (r *Repository) ResetFailedLoginAttempts(ctx context.Context, userID string) error {
-	return r.queries.ResetFailedLoginAttempts(ctx, userID)
+	return r.q(ctx).ResetFailedLoginAttempts(ctx, userID)
 }
 
 func (r *Repository) CreateLoginChallenge(ctx context.Context, challenge auth.LoginChallenge) error {
-	return r.queries.CreateLoginChallenge(ctx, sqlcgen.CreateLoginChallengeParams{
+	return r.q(ctx).CreateLoginChallenge(ctx, sqlcgen.CreateLoginChallengeParams{
 		ID: challenge.ID, UserID: challenge.UserID,
 		ChallengeTokenHash: challenge.ChallengeTokenHash,
 		ExpiresAt:          toTimestamptz(challenge.ExpiresAt),
@@ -74,7 +74,7 @@ func (r *Repository) CreateLoginChallenge(ctx context.Context, challenge auth.Lo
 }
 
 func (r *Repository) GetLoginChallengeByHash(ctx context.Context, tokenHash string) (*auth.LoginChallenge, error) {
-	c, err := r.queries.GetLoginChallengeByHash(ctx, tokenHash)
+	c, err := r.q(ctx).GetLoginChallengeByHash(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrChallengeInvalid
@@ -89,5 +89,5 @@ func (r *Repository) GetLoginChallengeByHash(ctx context.Context, tokenHash stri
 }
 
 func (r *Repository) ConsumeLoginChallenge(ctx context.Context, id string) error {
-	return r.queries.ConsumeLoginChallenge(ctx, id)
+	return r.q(ctx).ConsumeLoginChallenge(ctx, id)
 }

@@ -11,6 +11,7 @@ type InviteUserRequest struct {
 // invited user this endpoint creates.
 type UserProfileResponse struct {
 	ID                 string   `json:"id"`
+	TenantID           string   `json:"tenant_id"`
 	FullName           string   `json:"full_name"`
 	Username           string   `json:"username"`
 	Email              string   `json:"email"`

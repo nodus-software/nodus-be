@@ -17,7 +17,7 @@ func RequirePermission(code string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ac, ok := AuthFromContext(r.Context())
-			if !ok || !slices.Contains(ac.Permissions, code) {
+			if !ok || (!slices.Contains(ac.Permissions, code) && !slices.Contains(ac.Permissions, "*")) {
 				response.Forbidden(w, "you do not have permission to perform this action")
 				return
 			}

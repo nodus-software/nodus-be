@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -93,14 +94,22 @@ type Config struct {
 // Load reads from a .env file if present, then falls back to system env vars.
 // Missing required variables cause a fatal error at startup.
 func Load() (*Config, error) {
-	// Attempt to load .env — log a notice if not found but don't fail,
-	// since production environments typically use system env vars instead.
-	if err := godotenv.Load(); err != nil {
+	// Look in the current directory and its parents. This supports running
+	// from the repository root, cmd/api, or through a debugger whose working
+	// directory is a package directory.
+	if path := findDotEnv(); path != "" {
+		if err := godotenv.Load(path); err != nil {
+			return nil, fmt.Errorf("load %s: %w", path, err)
+		}
+	} else {
 		log.Println("No .env file found, reading from system environment")
 	}
 
+	appEnv := getEnv("APP_ENV", "development")
+	development := appEnv != "production"
+
 	cfg := &Config{
-		AppEnv:         getEnv("APP_ENV", "development"),
+		AppEnv:         appEnv,
 		AppPort:        getEnv("APP_PORT", "8080"),
 		BaseUrl:        getEnv("BASE_URL", "http://localhost"),
 		AllowedOrigins: strings.Fields(getEnv("ALLOWED_ORIGINS", "")),
@@ -110,25 +119,25 @@ func Load() (*Config, error) {
 		ShutdownGrace:  getEnvDuration("SHUTDOWN_GRACE", 10*time.Second),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
-		DBPort:     getEnv("DB_PORT", "5432"),
-		DBName:     requireEnv("DB_NAME"),
-		DBUser:     requireEnv("DB_USER"),
-		DBPassword: requireEnv("DB_PASSWORD"),
+		DBPort:     getEnv("DB_PORT", developmentDefault(development, "5433", "5432")),
+		DBName:     requiredWithDevDefault("DB_NAME", development, "nodus_health"),
+		DBUser:     requiredWithDevDefault("DB_USER", development, "nodus"),
+		DBPassword: requiredWithDevDefault("DB_PASSWORD", development, "nodus"),
 		DBSSLMode:  getEnv("DB_SSL_MODE", "disable"),
 		DBUrl:      getEnv("DB_URL", ""),
 
 		TestDBHost:     getEnv("TEST_DB_HOST", "localhost"),
-		TestDBPort:     getEnv("TEST_DB_PORT", "5432"),
-		TestDBName:     requireEnv("TEST_DB_NAME"),
-		TestDBUser:     requireEnv("TEST_DB_USER"),
-		TestDBPassword: requireEnv("TEST_DB_PASSWORD"),
+		TestDBPort:     getEnv("TEST_DB_PORT", developmentDefault(development, "5433", "5432")),
+		TestDBName:     getEnv("TEST_DB_NAME", "nodus_health_test"),
+		TestDBUser:     getEnv("TEST_DB_USER", "nodus"),
+		TestDBPassword: getEnv("TEST_DB_PASSWORD", "nodus"),
 		TestDBSSLMode:  getEnv("TEST_DB_SSL_MODE", "disable"),
 		TestDBUrl:      getEnv("TEST_DB_URL", ""),
 
 		RedisAddr:     getEnv("REDIS_ADDRESS", "localhost:6379"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 
-		JWTSecret:       requireEnv("JWT_SECRET"),
+		JWTSecret:       requiredWithDevDefault("JWT_SECRET", development, "development-only-change-me"),
 		AccessTokenTTL:  getEnvDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL: getEnvDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 
@@ -151,7 +160,7 @@ func Load() (*Config, error) {
 
 		TOTPIssuer:         getEnv("TOTP_ISSUER", "Nodus Health"),
 		MFABackupCodeCount: getEnvInt("MFA_BACKUP_CODE_COUNT", 10),
-		MFAEncryptionKey:   requireEnv("MFA_ENCRYPTION_KEY"),
+		MFAEncryptionKey:   requiredWithDevDefault("MFA_ENCRYPTION_KEY", development, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
 
 		LockoutMaxAttempts: getEnvInt("LOCKOUT_MAX_ATTEMPTS", 5),
 		LockoutDuration:    getEnvDuration("LOCKOUT_DURATION", 15*time.Minute),
@@ -166,6 +175,43 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func findDotEnv() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		candidate := filepath.Join(dir, ".env")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func developmentDefault(development bool, dev, production string) string {
+	if development {
+		return dev
+	}
+	return production
+}
+
+// requiredWithDevDefault keeps production fail-closed while making a fresh
+// local checkout work with docker-compose's documented credentials.
+func requiredWithDevDefault(key string, development bool, defaultValue string) string {
+	if val, ok := os.LookupEnv(key); ok && val != "" {
+		return val
+	}
+	if development {
+		return defaultValue
+	}
+	return requireEnv(key)
 }
 
 // DSN builds the PostgreSQL connection string from config values.

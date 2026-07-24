@@ -45,7 +45,7 @@ func (q *Queries) CreateLoginChallenge(ctx context.Context, arg CreateLoginChall
 }
 
 const getLoginChallengeByHash = `-- name: GetLoginChallengeByHash :one
-SELECT id, user_id, challenge_token_hash, expires_at, consumed_at, created_at FROM login_challenges WHERE challenge_token_hash = $1
+SELECT id, user_id, challenge_token_hash, expires_at, consumed_at, created_at, tenant_id FROM login_challenges WHERE challenge_token_hash = $1
 `
 
 func (q *Queries) GetLoginChallengeByHash(ctx context.Context, challengeTokenHash string) (LoginChallenge, error) {
@@ -58,12 +58,13 @@ func (q *Queries) GetLoginChallengeByHash(ctx context.Context, challengeTokenHas
 		&i.ExpiresAt,
 		&i.ConsumedAt,
 		&i.CreatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at FROM users WHERE id = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
@@ -84,12 +85,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.NextAccessReviewDue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at FROM users WHERE username = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE username = $1
 `
 
 func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
@@ -110,6 +112,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.NextAccessReviewDue,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TenantID,
 	)
 	return i, err
 }

@@ -42,7 +42,7 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 }
 
 const listAuditLogs = `-- name: ListAuditLogs :many
-SELECT id, timestamp, user_id, action, target_resource, ip_address, result, metadata, created_at FROM audit_logs
+SELECT id, timestamp, user_id, action, target_resource, ip_address, result, metadata, created_at, tenant_id FROM audit_logs
 WHERE ($2::uuid IS NULL OR user_id = $2)
   AND ($3::text IS NULL OR action = $3)
   AND ($4::timestamptz IS NULL OR "timestamp" >= $4)
@@ -84,6 +84,7 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 			&i.Result,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}

@@ -34,7 +34,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at FROM sessions WHERE id = $1
+SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at, tenant_id FROM sessions WHERE id = $1
 `
 
 func (q *Queries) GetSessionByID(ctx context.Context, id string) (Session, error) {
@@ -49,12 +49,13 @@ func (q *Queries) GetSessionByID(ctx context.Context, id string) (Session, error
 		&i.CreatedAt,
 		&i.LastActiveAt,
 		&i.RevokedAt,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const listActiveSessionsByUser = `-- name: ListActiveSessionsByUser :many
-SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at FROM sessions
+SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at, tenant_id FROM sessions
 WHERE user_id = $1 AND revoked_at IS NULL
 ORDER BY last_active_at DESC
 `
@@ -77,6 +78,7 @@ func (q *Queries) ListActiveSessionsByUser(ctx context.Context, userID string) (
 			&i.CreatedAt,
 			&i.LastActiveAt,
 			&i.RevokedAt,
+			&i.TenantID,
 		); err != nil {
 			return nil, err
 		}
