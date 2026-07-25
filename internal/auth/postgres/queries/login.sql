@@ -1,8 +1,8 @@
 -- name: GetUserByUsername :one
-SELECT * FROM users WHERE username = $1;
+SELECT * FROM users WHERE tenant_id = $1 AND username = $2;
 
 -- name: GetUserByID :one
-SELECT * FROM users WHERE id = $1;
+SELECT * FROM users WHERE tenant_id = $1 AND id = $2;
 
 -- name: IncrementFailedLoginAttempts :one
 UPDATE users

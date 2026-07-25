@@ -9,6 +9,7 @@ import (
 
 	"nodus-health/internal/auth"
 	"nodus-health/internal/auth/postgres/sqlcgen"
+	"nodus-health/internal/tenant"
 )
 
 func userFromRow(u sqlcgen.User) *auth.User {
@@ -31,7 +32,14 @@ func userFromRow(u sqlcgen.User) *auth.User {
 }
 
 func (r *Repository) GetUserByUsername(ctx context.Context, username string) (*auth.User, error) {
-	u, err := r.q(ctx).GetUserByUsername(ctx, username)
+	tenantID, err := tenant.ID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u, err := r.q(ctx).GetUserByUsername(ctx, sqlcgen.GetUserByUsernameParams{
+		TenantID: tenantID,
+		Username: username,
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrUserNotFound
@@ -42,7 +50,14 @@ func (r *Repository) GetUserByUsername(ctx context.Context, username string) (*a
 }
 
 func (r *Repository) GetUserByID(ctx context.Context, id string) (*auth.User, error) {
-	u, err := r.q(ctx).GetUserByID(ctx, id)
+	tenantID, err := tenant.ID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u, err := r.q(ctx).GetUserByID(ctx, sqlcgen.GetUserByIDParams{
+		TenantID: tenantID,
+		ID:       id,
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrUserNotFound
