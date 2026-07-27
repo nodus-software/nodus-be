@@ -1,0 +1,6 @@
+{{define "footer"}}<tr><td align="center" style="padding:24px 24px 0;color:#777d87;font-size:11px;line-height:1.6;">
+  <p style="margin:0 0 8px;">This is an automated security and account message from {{.AppName}}.</p>
+  {{if .SupportEmail}}<a href="mailto:{{.SupportEmail}}" style="color:#555b65;text-decoration:underline;">Contact support</a>{{else if .SupportURL}}<a href="{{.SupportURL}}" style="color:#555b65;text-decoration:underline;">Contact support</a>{{end}}
+  {{if .PrivacyURL}}<span aria-hidden="true"> &middot; </span><a href="{{.PrivacyURL}}" style="color:#555b65;text-decoration:underline;">Privacy</a>{{end}}
+  <p style="margin:8px 0 0;">&copy; {{.CurrentYear}} {{.AppName}}</p>
+</td></tr>{{end}}

@@ -1,0 +1,14 @@
+{{define "content"}}{{if .IsResend}}YOUR NEW INVITATION{{else}}YOU'VE BEEN INVITED{{end}}
+
+Hi {{.RecipientName}},
+
+{{if .IsResend}}A new invitation link has been issued for your {{.OrganizationName}} account.
+This link replaces all invitation links sent previously.{{else}}{{.InviterName}} has invited you to join {{.OrganizationName}} on {{.AppName}}.
+
+Accept the invitation to create your password and complete account security setup.{{end}}
+
+Accept invitation: {{.InviteURL}}
+
+This link expires on {{formatTime .ExpiresAt}} and can only be used once.
+
+If you were not expecting this invitation, ignore this email or contact {{.OrganizationName}}.{{end}}

@@ -12,7 +12,9 @@ import (
 )
 
 const deleteUserRoles = `-- name: DeleteUserRoles :exec
-DELETE FROM user_roles WHERE user_id = $1
+DELETE FROM user_roles
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) DeleteUserRoles(ctx context.Context, userID string) error {
@@ -21,7 +23,9 @@ func (q *Queries) DeleteUserRoles(ctx context.Context, userID string) error {
 }
 
 const getRolesByIDs = `-- name: GetRolesByIDs :many
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id::text = ANY($1::text[])
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles
+WHERE id::text = ANY($1::text[])
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, error) {
@@ -54,7 +58,9 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE id = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
@@ -93,6 +99,7 @@ LEFT JOIN roles r ON r.id = ur.role_id
 LEFT JOIN role_permissions rp ON rp.role_id = r.id
 LEFT JOIN permissions p ON p.id = rp.permission_id
 WHERE u.id = $1
+  AND u.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 GROUP BY u.id
 `
 
@@ -147,7 +154,10 @@ const hasSuperuserRole = `-- name: HasSuperuserRole :one
 SELECT EXISTS (
     SELECT 1 FROM user_roles ur
     JOIN roles r ON r.id = ur.role_id
-    WHERE ur.user_id = $1 AND r.is_superuser_role = true
+    WHERE ur.user_id = $1
+      AND ur.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+      AND r.tenant_id = ur.tenant_id
+      AND r.is_superuser_role = true
 )
 `
 
@@ -159,16 +169,23 @@ func (q *Queries) HasSuperuserRole(ctx context.Context, userID string) (bool, er
 }
 
 const insertUserRole = `-- name: InsertUserRole :exec
-INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM users u
+JOIN roles r ON r.id = $1
+WHERE u.id = $2
+  AND u.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND r.tenant_id = u.tenant_id
+ON CONFLICT DO NOTHING
 `
 
 type InsertUserRoleParams struct {
-	UserID string `json:"user_id"`
 	RoleID string `json:"role_id"`
+	UserID string `json:"user_id"`
 }
 
 func (q *Queries) InsertUserRole(ctx context.Context, arg InsertUserRoleParams) error {
-	_, err := q.db.Exec(ctx, insertUserRole, arg.UserID, arg.RoleID)
+	_, err := q.db.Exec(ctx, insertUserRole, arg.RoleID, arg.UserID)
 	return err
 }
 
@@ -184,9 +201,13 @@ LEFT JOIN user_roles ur ON ur.user_id = u.id
 LEFT JOIN roles r ON r.id = ur.role_id
 LEFT JOIN role_permissions rp ON rp.role_id = r.id
 LEFT JOIN permissions p ON p.id = rp.permission_id
-WHERE ($1::text IS NULL OR EXISTS (
+WHERE u.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND ($1::text IS NULL OR EXISTS (
         SELECT 1 FROM user_roles ur2 JOIN roles r2 ON r2.id = ur2.role_id
-        WHERE ur2.user_id = u.id AND r2.name = $1
+        WHERE ur2.user_id = u.id
+          AND ur2.tenant_id = u.tenant_id
+          AND r2.tenant_id = u.tenant_id
+          AND r2.name = $1
       ))
   AND ($2::user_status IS NULL OR u.status = $2)
   AND ($3::boolean IS NULL OR
@@ -263,7 +284,9 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 }
 
 const recordAccessReview = `-- name: RecordAccessReview :exec
-UPDATE users SET last_access_review_at = $2, next_access_review_due = $3 WHERE id = $1
+UPDATE users SET last_access_review_at = $2, next_access_review_due = $3
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 type RecordAccessReviewParams struct {
@@ -278,7 +301,9 @@ func (q *Queries) RecordAccessReview(ctx context.Context, arg RecordAccessReview
 }
 
 const setProviderIdentifier = `-- name: SetProviderIdentifier :exec
-UPDATE users SET provider_identifier = $2 WHERE id = $1
+UPDATE users SET provider_identifier = $2
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 type SetProviderIdentifierParams struct {
@@ -292,7 +317,9 @@ func (q *Queries) SetProviderIdentifier(ctx context.Context, arg SetProviderIden
 }
 
 const unlockUser = `-- name: UnlockUser :exec
-UPDATE users SET locked_until = NULL, failed_login_attempts = 0 WHERE id = $1
+UPDATE users SET locked_until = NULL, failed_login_attempts = 0
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) UnlockUser(ctx context.Context, id string) error {
@@ -301,7 +328,9 @@ func (q *Queries) UnlockUser(ctx context.Context, id string) error {
 }
 
 const updateUserStatus = `-- name: UpdateUserStatus :exec
-UPDATE users SET status = $2 WHERE id = $1
+UPDATE users SET status = $2
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 type UpdateUserStatusParams struct {

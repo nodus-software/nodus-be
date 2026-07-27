@@ -15,6 +15,7 @@ import (
 	"nodus-health/internal/audit"
 	"nodus-health/internal/auth"
 	"nodus-health/internal/invitation"
+	"nodus-health/internal/tenant"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
 	"nodus-health/pkg/utility"
@@ -69,6 +70,7 @@ func (a *stubAuthorizer) grant(userID string, permissions []string) {
 }
 
 const testJWTSecret = "test-jwt-secret"
+const testTenantID = "00000000-0000-0000-0000-000000000099"
 
 type Env struct {
 	Router     http.Handler
@@ -89,6 +91,12 @@ func Setup(t *testing.T) *Env {
 	authorizer := &stubAuthorizer{permissions: map[string][]string{}}
 	handler := invitation.NewHandler(service, authorizer, testJWTSecret, logger.NewLogger())
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := tenant.WithContext(req.Context(), tenant.Identity{ID: testTenantID, Slug: "nodus-test"})
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	})
 	handler.RegisterRoutes(r)
 	return &Env{Router: r, Repo: repo, Mailer: mailer, authorizer: authorizer}
 }
@@ -100,7 +108,7 @@ func (e *Env) NewActor(t *testing.T, permissions ...string) (userID, accessToken
 		t.Fatal(err)
 	}
 	e.authorizer.grant(id, permissions)
-	token, _, err := security.IssueAccessToken(testJWTSecret, time.Hour, id, "session")
+	token, _, err := security.IssueAccessToken(testJWTSecret, time.Hour, id, "session", testTenantID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +196,7 @@ func (r *memoryRepo) GetRolesByIDs(_ context.Context, ids []string) ([]invitatio
 	return out, nil
 }
 
-func (r *memoryRepo) GetUserByEmail(_ context.Context, email string) (*invitation.PendingUser, error) {
+func (r *memoryRepo) GetUserByEmail(_ context.Context, _, email string) (*invitation.PendingUser, error) {
 	id, ok := r.usersByMail[email]
 	if !ok {
 		return nil, invitation.ErrUserNotFound

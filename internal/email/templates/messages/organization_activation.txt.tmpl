@@ -1,0 +1,12 @@
+{{define "content"}}ACTIVATE YOUR ORGANIZATION
+
+Hi {{.RecipientName}},
+
+Your organization, {{.OrganizationName}}, has been registered on {{.AppName}}.
+
+Activate the organization and create your administrator credentials:
+{{.ActivationURL}}
+
+This link expires on {{formatTime .ExpiresAt}} and can only be used once.
+
+If you did not register this organization, contact support immediately.{{end}}

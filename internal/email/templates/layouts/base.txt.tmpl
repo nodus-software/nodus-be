@@ -1,0 +1,9 @@
+{{define "base"}}{{.AppName}}
+
+{{template "content" .}}
+
+---
+This is an automated security and account message from {{.AppName}}.
+{{if .SupportEmail}}Support: {{.SupportEmail}}{{else if .SupportURL}}Support: {{.SupportURL}}{{end}}
+{{if .PrivacyURL}}Privacy: {{.PrivacyURL}}{{end}}
+(c) {{.CurrentYear}} {{.AppName}}{{end}}

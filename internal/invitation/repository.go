@@ -9,7 +9,7 @@ import "context"
 // roles/permissions without owning their CRUD.
 type Repository interface {
 	GetRolesByIDs(ctx context.Context, ids []string) ([]Role, error)
-	GetUserByEmail(ctx context.Context, email string) (*PendingUser, error)
+	GetUserByEmail(ctx context.Context, tenantID, email string) (*PendingUser, error)
 	GetUserByID(ctx context.Context, id string) (*PendingUser, error)
 	CreateInvitedUser(ctx context.Context, params CreateInvitedUserParams) error
 	AssignUserRole(ctx context.Context, userID, roleID string) error

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"nodus-health/internal/auth"
+	"nodus-health/internal/email"
 	"nodus-health/internal/middleware"
 	"nodus-health/internal/tenant"
 	"nodus-health/pkg/logger"
@@ -33,7 +34,6 @@ type Organization struct {
 	Slug             string    `json:"slug"`
 	Status           string    `json:"status"`
 	CreatedAt        time.Time `json:"created_at"`
-	ActivationURL    string    `json:"activation_url,omitempty"`
 }
 
 type RegisterRequest struct {
@@ -54,23 +54,23 @@ type AcceptRequest struct {
 }
 
 type Mailer interface {
-	Send(context.Context, string, string, string) error
+	SendHTML(ctx context.Context, to, subject, textBody, htmlBody string) error
 }
 
 type Service struct {
-	pool        *pgxpool.Pool
-	mailer      Mailer
-	baseURL     string
-	bcryptCost  int
-	policy      auth.PasswordPolicy
-	log         *logger.Logger
-	development bool
+	pool       *pgxpool.Pool
+	mailer     Mailer
+	baseURL    string
+	bcryptCost int
+	policy     auth.PasswordPolicy
+	log        *logger.Logger
+	email      *email.Renderer
 }
 
-func NewService(pool *pgxpool.Pool, mailer Mailer, baseURL string, bcryptCost int, policy auth.PasswordPolicy, log *logger.Logger, development bool) *Service {
+func NewService(pool *pgxpool.Pool, mailer Mailer, renderer *email.Renderer, baseURL string, bcryptCost int, policy auth.PasswordPolicy, log *logger.Logger) *Service {
 	return &Service{
 		pool: pool, mailer: mailer, baseURL: baseURL, bcryptCost: bcryptCost,
-		policy: policy, log: log, development: development,
+		policy: policy, log: log, email: renderer,
 	}
 }
 
@@ -148,11 +148,17 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 		url.QueryEscape(rawToken),
 		url.QueryEscape(req.Slug),
 	)
-	if s.development {
-		org.ActivationURL = link
-		s.log.Info("development organization activation link", "email", req.AdminEmail, "url", link)
+	rendered, err := s.email.RenderOrganizationActivation(email.OrganizationActivationData{
+		CommonData: email.CommonData{
+			RecipientName: req.AdminFullName, OrganizationName: req.OrganizationName,
+		},
+		ActivationURL: link,
+		ExpiresAt:     now.Add(24 * time.Hour),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render organization activation email: %w", err)
 	}
-	if err := s.mailer.Send(ctx, req.AdminEmail, "Activate your Nodus Health organization", link); err != nil {
+	if err := s.mailer.SendHTML(ctx, req.AdminEmail, rendered.Subject, rendered.Text, rendered.HTML); err != nil {
 		s.log.Error("failed to send organization activation", "error", err.Error())
 	}
 	return &org, nil

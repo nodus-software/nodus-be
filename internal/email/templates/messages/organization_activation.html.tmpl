@@ -1,0 +1,6 @@
+{{define "content"}}<p style="margin:0 0 16px;font-size:15px;line-height:1.65;">Hi {{.RecipientName}},</p>
+<p style="margin:0 0 16px;font-size:15px;line-height:1.65;">Your organization, <strong>{{.OrganizationName}}</strong>, has been registered on {{.AppName}}.</p>
+<p style="margin:0;font-size:15px;line-height:1.65;">Activate the organization and create your administrator credentials using the button below.</p>
+{{template "button" .}}
+<div style="margin:24px 0 0;padding:14px 16px;background:#f0efff;border-left:3px solid #2720ff;border-radius:6px;color:#555b65;font-size:13px;line-height:1.6;">This link expires on <strong>{{formatTime .ExpiresAt}}</strong> and can only be used once.</div>
+<p style="margin:22px 0 0;color:#6d727b;font-size:13px;line-height:1.6;">If you did not register this organization, contact support immediately.</p>{{end}}

@@ -1,0 +1,24 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{.Heading}}</title>
+</head>
+<body style="margin:0;padding:0;background:#f6f7f9;color:#353940;font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;-webkit-text-size-adjust:100%;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{{.Preheader}}</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f6f7f9;">
+    <tr><td align="center" style="padding:40px 16px;">
+      <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:600px;">
+        {{template "header" .}}
+        <tr><td style="background:#ffffff;border:1px solid #dfe2e7;border-radius:10px;padding:40px 42px;box-shadow:0 6px 20px rgba(35,38,44,.08);">
+          <h1 style="margin:0 0 20px;color:#353940;font-size:24px;line-height:1.3;font-weight:600;letter-spacing:-.01em;">{{.Heading}}</h1>
+          {{template "content" .}}
+        </td></tr>
+        {{template "footer" .}}
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>{{end}}

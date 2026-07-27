@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"nodus-health/internal/audit"
@@ -49,7 +50,12 @@ func NewService(repo Repository, audit AuditRecorder, mailer Mailer, log *logger
 // emails a single-use accept-invite link. provider_identifier is required
 // only when at least one selected role requires it (Reg. 12(b)(v)).
 func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUserRequest) (*UserProfileResponse, error) {
-	_, err := s.repo.GetUserByEmail(ctx, req.Email)
+	tenantID, err := tenant.ID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	_, err = s.repo.GetUserByEmail(ctx, tenantID, req.Email)
 	if err == nil {
 		return nil, ErrEmailAlreadyExists
 	}
@@ -129,7 +135,6 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 		return nil, err
 	}
 
-	tenantID, _ := tenant.ID(ctx)
 	return &UserProfileResponse{
 		ID: userID, TenantID: tenantID, FullName: req.FullName, Username: req.Email, Email: req.Email,
 		ProviderIdentifier: providerIdentifier, Roles: roleNames, Permissions: []string{},

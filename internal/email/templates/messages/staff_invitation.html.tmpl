@@ -1,0 +1,6 @@
+{{define "content"}}<p style="margin:0 0 16px;font-size:15px;line-height:1.65;">Hi {{.RecipientName}},</p>
+{{if .IsResend}}<p style="margin:0 0 16px;font-size:15px;line-height:1.65;">A new invitation link has been issued for your <strong>{{.OrganizationName}}</strong> account.</p>{{else}}<p style="margin:0 0 16px;font-size:15px;line-height:1.65;"><strong>{{.InviterName}}</strong> has invited you to join <strong>{{.OrganizationName}}</strong> on {{.AppName}}.</p>
+<p style="margin:0;font-size:15px;line-height:1.65;">Accept the invitation to create your password and complete account security setup.</p>{{end}}
+{{template "button" .}}
+<div style="margin:24px 0 0;padding:14px 16px;background:#f0efff;border-left:3px solid #2720ff;border-radius:6px;color:#555b65;font-size:13px;line-height:1.6;">{{if .IsResend}}This link replaces all invitation links sent previously. {{end}}It expires on <strong>{{formatTime .ExpiresAt}}</strong> and can only be used once.</div>
+<p style="margin:22px 0 0;color:#6d727b;font-size:13px;line-height:1.6;">If you were not expecting this invitation, ignore this email or contact {{.OrganizationName}}.</p>{{end}}

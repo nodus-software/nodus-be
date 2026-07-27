@@ -12,7 +12,9 @@ import (
 )
 
 const activateUserWithPassword = `-- name: ActivateUserWithPassword :exec
-UPDATE users SET status = 'active', password_hash = $2, password_changed_at = now() WHERE id = $1
+UPDATE users SET status = 'active', password_hash = $2, password_changed_at = now()
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 type ActivateUserWithPasswordParams struct {
@@ -26,21 +28,30 @@ func (q *Queries) ActivateUserWithPassword(ctx context.Context, arg ActivateUser
 }
 
 const assignUserRole = `-- name: AssignUserRole :exec
-INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM users u
+JOIN roles r ON r.id = $1
+WHERE u.id = $2
+  AND u.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND r.tenant_id = u.tenant_id
+ON CONFLICT DO NOTHING
 `
 
 type AssignUserRoleParams struct {
-	UserID string `json:"user_id"`
 	RoleID string `json:"role_id"`
+	UserID string `json:"user_id"`
 }
 
 func (q *Queries) AssignUserRole(ctx context.Context, arg AssignUserRoleParams) error {
-	_, err := q.db.Exec(ctx, assignUserRole, arg.UserID, arg.RoleID)
+	_, err := q.db.Exec(ctx, assignUserRole, arg.RoleID, arg.UserID)
 	return err
 }
 
 const consumeInvitation = `-- name: ConsumeInvitation :exec
-UPDATE invitations SET used_at = now() WHERE id = $1
+UPDATE invitations SET used_at = now()
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) ConsumeInvitation(ctx context.Context, id string) error {
@@ -138,7 +149,9 @@ func (q *Queries) CreateInvitedUser(ctx context.Context, arg CreateInvitedUserPa
 }
 
 const getInvitationByTokenHash = `-- name: GetInvitationByTokenHash :one
-SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at, tenant_id FROM invitations WHERE token_hash = $1
+SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at, tenant_id FROM invitations
+WHERE token_hash = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash string) (Invitation, error) {
@@ -158,7 +171,10 @@ func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash string
 }
 
 const getLatestInvitationByUserID = `-- name: GetLatestInvitationByUserID :one
-SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at, tenant_id FROM invitations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, user_id, invited_by, token_hash, expires_at, used_at, created_at, tenant_id FROM invitations
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestInvitationByUserID(ctx context.Context, userID string) (Invitation, error) {
@@ -178,7 +194,9 @@ func (q *Queries) GetLatestInvitationByUserID(ctx context.Context, userID string
 }
 
 const getRolesByIDs = `-- name: GetRolesByIDs :many
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id::text = ANY($1::text[])
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles
+WHERE id::text = ANY($1::text[])
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, error) {
@@ -211,11 +229,18 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE email = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users
+WHERE tenant_id = $1
+  AND email = $2
 `
 
-func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByEmail, email)
+type GetUserByEmailParams struct {
+	TenantID string `json:"tenant_id"`
+	Email    string `json:"email"`
+}
+
+func (q *Queries) GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, arg.TenantID, arg.Email)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -238,7 +263,9 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE id = $1
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
@@ -268,6 +295,8 @@ const getUserRoleNames = `-- name: GetUserRoleNames :many
 SELECT r.name FROM roles r
 JOIN user_roles ur ON ur.role_id = r.id
 WHERE ur.user_id = $1
+  AND ur.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND r.tenant_id = ur.tenant_id
 ORDER BY r.name
 `
 

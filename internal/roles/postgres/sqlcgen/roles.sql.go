@@ -10,17 +10,22 @@ import (
 )
 
 const addRolePermission = `-- name: AddRolePermission :exec
-INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM roles r
+JOIN permissions p ON p.id = $1
+WHERE r.id = $2
+  AND r.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 ON CONFLICT DO NOTHING
 `
 
 type AddRolePermissionParams struct {
-	RoleID       string `json:"role_id"`
 	PermissionID string `json:"permission_id"`
+	RoleID       string `json:"role_id"`
 }
 
 func (q *Queries) AddRolePermission(ctx context.Context, arg AddRolePermissionParams) error {
-	_, err := q.db.Exec(ctx, addRolePermission, arg.RoleID, arg.PermissionID)
+	_, err := q.db.Exec(ctx, addRolePermission, arg.PermissionID, arg.RoleID)
 	return err
 }
 
@@ -85,7 +90,9 @@ func (q *Queries) GetPermissionsByCodes(ctx context.Context, codes []string) ([]
 }
 
 const getRoleByID = `-- name: GetRoleByID :one
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id = $1
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) GetRoleByID(ctx context.Context, id string) (Role, error) {
@@ -105,7 +112,9 @@ func (q *Queries) GetRoleByID(ctx context.Context, id string) (Role, error) {
 }
 
 const getRolesByIDs = `-- name: GetRolesByIDs :many
-SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles WHERE id::text = ANY($1::text[])
+SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles
+WHERE id::text = ANY($1::text[])
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, error) {
@@ -141,7 +150,10 @@ const hasSuperuserRole = `-- name: HasSuperuserRole :one
 SELECT EXISTS (
     SELECT 1 FROM user_roles ur
     JOIN roles r ON r.id = ur.role_id
-    WHERE ur.user_id = $1 AND r.is_superuser_role = true
+    WHERE ur.user_id = $1
+      AND ur.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+      AND r.tenant_id = ur.tenant_id
+      AND r.is_superuser_role = true
 )
 `
 
@@ -156,8 +168,9 @@ const listRolesWithPermissions = `-- name: ListRolesWithPermissions :many
 SELECT r.id, r.tenant_id, r.name, r.description, r.is_superuser_role, r.requires_provider_identifier,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes
 FROM roles r
-LEFT JOIN role_permissions rp ON rp.role_id = r.id
+LEFT JOIN role_permissions rp ON rp.role_id = r.id AND rp.tenant_id = r.tenant_id
 LEFT JOIN permissions p ON p.id = rp.permission_id
+WHERE r.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 GROUP BY r.id
 ORDER BY r.name
 `

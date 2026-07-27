@@ -107,7 +107,7 @@ paths:
                 admin_email: { type: string, format: email }
       responses:
         "201":
-          description: Organization created; activation email sent to admin_email. In development only, data.activation_url is also returned for localhost testing.
+          description: Organization created; activation email sent to admin_email.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OrganizationResponse" }
@@ -881,9 +881,6 @@ components:
         type: { type: string, enum: [totp, biometric] }
         label: { type: string }
         created_at: { type: string, format: date-time }
-        activation_url:
-          type: string
-          description: Development-only localhost activation URL; omitted in production.
 
     PasswordPolicy:
       type: object

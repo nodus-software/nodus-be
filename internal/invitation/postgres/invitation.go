@@ -38,8 +38,8 @@ func (r *Repository) GetRolesByIDs(ctx context.Context, ids []string) ([]invitat
 	return out, nil
 }
 
-func (r *Repository) GetUserByEmail(ctx context.Context, email string) (*invitation.PendingUser, error) {
-	u, err := r.q(ctx).GetUserByEmail(ctx, email)
+func (r *Repository) GetUserByEmail(ctx context.Context, tenantID, email string) (*invitation.PendingUser, error) {
+	u, err := r.q(ctx).GetUserByEmail(ctx, sqlcgen.GetUserByEmailParams{TenantID: tenantID, Email: email})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, invitation.ErrUserNotFound

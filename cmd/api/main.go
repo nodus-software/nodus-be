@@ -10,6 +10,7 @@ import (
 	auditpg "nodus-health/internal/audit/postgres"
 	"nodus-health/internal/auth"
 	authpg "nodus-health/internal/auth/postgres"
+	"nodus-health/internal/email"
 	"nodus-health/internal/invitation"
 	invitationpg "nodus-health/internal/invitation/postgres"
 	"nodus-health/internal/organizations"
@@ -52,6 +53,9 @@ func main() {
 	mailer := &auth.SMTPMailer{
 		Host: cfg.SmtpHost, Port: cfg.SmtpPort, Sender: cfg.SmtpSender, Password: cfg.SmtpPassword,
 	}
+	emailRenderer := email.NewRenderer(email.CommonData{
+		AppName: "Nodus Health", AppURL: cfg.BaseUrl,
+	})
 
 	authCfg := auth.Config{
 		BaseURL: cfg.BaseUrl,
@@ -115,8 +119,7 @@ func main() {
 	auditHandler := audit.NewHandler(auditService, authService, cfg.JWTSecret, log)
 
 	organizationService := organizations.NewService(
-		pool, mailer, cfg.BaseUrl, cfg.BcryptCost, authCfg.PasswordPolicy, log,
-		cfg.AppEnv != "production",
+		pool, mailer, emailRenderer, cfg.BaseUrl, cfg.BcryptCost, authCfg.PasswordPolicy, log,
 	)
 	organizationHandler := organizations.NewHandler(organizationService, authService, cfg.JWTSecret, cfg.EnrollmentTokenTTL)
 
