@@ -27,7 +27,7 @@ func TestChangePassword_GoldenPath_RevokesOtherSessions(t *testing.T) {
 	env := Setup(t)
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	secret := env.EnrollTOTP(t, userID)
-	accessToken, _ := env.CompleteLogin(t, "jdoe", "Sup3rSecret!Pass", secret)
+	accessToken, _ := env.CompleteLogin(t, "jdoe@example.com", "Sup3rSecret!Pass", secret)
 	otherSessionID := env.CreateSession(t, userID)
 	otherAccessToken := env.IssueAccessToken(t, userID, otherSessionID)
 
@@ -55,7 +55,7 @@ func TestChangePassword_WrongCurrentPassword_Returns401(t *testing.T) {
 	env := Setup(t)
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	secret := env.EnrollTOTP(t, userID)
-	accessToken, _ := env.CompleteLogin(t, "jdoe", "Sup3rSecret!Pass", secret)
+	accessToken, _ := env.CompleteLogin(t, "jdoe@example.com", "Sup3rSecret!Pass", secret)
 
 	rec := env.JSON(t, http.MethodPost, "/auth/password/change", accessToken, map[string]string{
 		"current_password": "wrong-password", "new_password": "NewSup3rSecret!Pass",
@@ -69,7 +69,7 @@ func TestChangePassword_WeakNewPassword_Returns422(t *testing.T) {
 	env := Setup(t)
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	secret := env.EnrollTOTP(t, userID)
-	accessToken, _ := env.CompleteLogin(t, "jdoe", "Sup3rSecret!Pass", secret)
+	accessToken, _ := env.CompleteLogin(t, "jdoe@example.com", "Sup3rSecret!Pass", secret)
 
 	rec := env.JSON(t, http.MethodPost, "/auth/password/change", accessToken, map[string]string{
 		"current_password": "Sup3rSecret!Pass", "new_password": "weak",
@@ -114,7 +114,7 @@ func TestPasswordReset_FullFlow(t *testing.T) {
 
 	// The new password must actually work for a fresh login.
 	loginRec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-		"username": "jdoe", "password": "BrandNewSecret!23",
+		"email": "jdoe@example.com", "password": "BrandNewSecret!23",
 	})
 	// No MFA enrolled at this point in the test, so this should fail with
 	// "mfa not enrolled" (401) rather than invalid credentials — proving the

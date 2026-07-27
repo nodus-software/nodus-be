@@ -1,6 +1,9 @@
 -- name: GetUserByUsername :one
 SELECT * FROM users WHERE tenant_id = $1 AND username = $2;
 
+-- name: GetUserByEmail :one
+SELECT * FROM users WHERE tenant_id = $1 AND email = $2;
+
 -- name: GetUserByID :one
 SELECT * FROM users WHERE tenant_id = $1 AND id = $2;
 

@@ -193,9 +193,9 @@ func (e *Env) IssueAccessToken(t *testing.T, userID, sessionID string) string {
 	}
 	return token
 }
-func (e *Env) CompleteLogin(t *testing.T, username, password, secret string) (string, string) {
+func (e *Env) CompleteLogin(t *testing.T, email, password, secret string) (string, string) {
 	t.Helper()
-	challenge := loginToChallenge(t, e, username, password)
+	challenge := loginToChallenge(t, e, email, password)
 	rec := e.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]string{"challenge_token": challenge, "method": "totp", "code": CurrentTOTPCode(t, secret)})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("complete login: %d %s", rec.Code, rec.Body.String())
@@ -208,10 +208,10 @@ func (e *Env) CompleteLogin(t *testing.T, username, password, secret string) (st
 	return pair.AccessToken, pair.RefreshToken
 }
 
-func loginToChallenge(t *testing.T, env *Env, username, password string) string {
+func loginToChallenge(t *testing.T, env *Env, email, password string) string {
 	t.Helper()
 	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-		"username": username, "password": password,
+		"email": email, "password": password,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login step 1 failed: %d %s", rec.Code, rec.Body.String())
@@ -274,6 +274,15 @@ func newMemoryRepo() *memoryRepo {
 func (r *memoryRepo) GetUserByUsername(_ context.Context, name string) (*auth.User, error) {
 	for _, u := range r.users {
 		if u.Username == name {
+			v := u
+			return &v, nil
+		}
+	}
+	return nil, auth.ErrUserNotFound
+}
+func (r *memoryRepo) GetUserByEmail(_ context.Context, email string) (*auth.User, error) {
+	for _, u := range r.users {
+		if u.Email == email {
 			v := u
 			return &v, nil
 		}

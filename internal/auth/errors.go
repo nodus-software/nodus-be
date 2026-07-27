@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	ErrInvalidCredentials      = errors.New("invalid username or password")
+	ErrInvalidCredentials      = errors.New("invalid email or password")
 	ErrAccountLocked           = errors.New("account is locked")
 	ErrMFANotEnrolled          = errors.New("no confirmed mfa factor enrolled")
 	ErrChallengeInvalid        = errors.New("challenge token invalid")

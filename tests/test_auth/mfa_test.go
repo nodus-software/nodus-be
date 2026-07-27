@@ -10,7 +10,7 @@ func TestLoginMFA_GoldenPath_IssuesTokenPair(t *testing.T) {
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	secret := env.EnrollTOTP(t, userID)
 
-	challenge := loginToChallenge(t, env, "jdoe", "Sup3rSecret!Pass")
+	challenge := loginToChallenge(t, env, "jdoe@example.com", "Sup3rSecret!Pass")
 	code := CurrentTOTPCode(t, secret)
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]string{
@@ -36,7 +36,7 @@ func TestLoginMFA_WrongCode_Returns401(t *testing.T) {
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	env.EnrollTOTP(t, userID)
 
-	challenge := loginToChallenge(t, env, "jdoe", "Sup3rSecret!Pass")
+	challenge := loginToChallenge(t, env, "jdoe@example.com", "Sup3rSecret!Pass")
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]string{
 		"challenge_token": challenge, "method": "totp", "code": "000000",
@@ -51,7 +51,7 @@ func TestLoginMFA_ChallengeIsSingleUse(t *testing.T) {
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	secret := env.EnrollTOTP(t, userID)
 
-	challenge := loginToChallenge(t, env, "jdoe", "Sup3rSecret!Pass")
+	challenge := loginToChallenge(t, env, "jdoe@example.com", "Sup3rSecret!Pass")
 	code := CurrentTOTPCode(t, secret)
 
 	first := env.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]string{
@@ -157,7 +157,7 @@ func TestLoginMFA_Biometric_GoldenPath(t *testing.T) {
 	pub, priv := generateEd25519Keypair(t)
 	env.EnrollBiometric(t, userID, pub)
 
-	challenge := loginToChallenge(t, env, "jdoe", "Sup3rSecret!Pass")
+	challenge := loginToChallenge(t, env, "jdoe@example.com", "Sup3rSecret!Pass")
 	signature := signChallenge(priv, challenge)
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]string{
@@ -175,7 +175,7 @@ func TestLoginMFA_Biometric_WrongSignature_Returns401(t *testing.T) {
 	_, otherPriv := generateEd25519Keypair(t)
 	env.EnrollBiometric(t, userID, pub)
 
-	challenge := loginToChallenge(t, env, "jdoe", "Sup3rSecret!Pass")
+	challenge := loginToChallenge(t, env, "jdoe@example.com", "Sup3rSecret!Pass")
 	signature := signChallenge(otherPriv, challenge) // signed with the WRONG key
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]string{

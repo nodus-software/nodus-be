@@ -182,11 +182,11 @@ paths:
   /auth/login:
     post:
       tags: [Auth]
-      summary: Step 1 of login - validate username/password, issue MFA challenge
+      summary: Step 1 of login - validate email/password, issue MFA challenge
       description: >
         Tenant is resolved from the request's subdomain (see the `tenant` server
-        variable), not from any field in this body. username is checked for
-        uniqueness within that tenant only, so the same username may exist under a
+        variable), not from any field in this body. email is checked for
+        uniqueness within that tenant only, so the same email may exist under a
         different subdomain belonging to a different organization.
       requestBody:
         required: true
@@ -194,9 +194,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [username, password]
+              required: [email, password]
               properties:
-                username: { type: string }
+                email: { type: string, format: email }
                 password: { type: string, format: password }
       responses:
         "200":

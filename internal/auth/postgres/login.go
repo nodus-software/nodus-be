@@ -49,6 +49,24 @@ func (r *Repository) GetUserByUsername(ctx context.Context, username string) (*a
 	return userFromRow(u), nil
 }
 
+func (r *Repository) GetUserByEmail(ctx context.Context, email string) (*auth.User, error) {
+	tenantID, err := tenant.ID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u, err := r.q(ctx).GetUserByEmail(ctx, sqlcgen.GetUserByEmailParams{
+		TenantID: tenantID,
+		Email:    email,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, auth.ErrUserNotFound
+		}
+		return nil, err
+	}
+	return userFromRow(u), nil
+}
+
 func (r *Repository) GetUserByID(ctx context.Context, id string) (*auth.User, error) {
 	tenantID, err := tenant.ID(ctx)
 	if err != nil {

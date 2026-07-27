@@ -13,6 +13,7 @@ import (
 // resolve a user's effective permissions.
 type Repository interface {
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	GetUserByID(ctx context.Context, id string) (*User, error)
 	IncrementFailedLoginAttempts(ctx context.Context, userID string) (int, error)
 	LockUser(ctx context.Context, userID string, until time.Time) error

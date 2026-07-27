@@ -11,6 +11,7 @@ import (
 func TestUserLookupsExplicitlyScopeByTenant(t *testing.T) {
 	tests := map[string]string{
 		"username": getUserByUsername,
+		"email":    getUserByEmail,
 		"id":       getUserByID,
 	}
 

@@ -9,7 +9,7 @@ func TestRefresh_GoldenPath_RotatesToken(t *testing.T) {
 	env := Setup(t)
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	secret := env.EnrollTOTP(t, userID)
-	accessToken, refreshToken := env.CompleteLogin(t, "jdoe", "Sup3rSecret!Pass", secret)
+	accessToken, refreshToken := env.CompleteLogin(t, "jdoe@example.com", "Sup3rSecret!Pass", secret)
 
 	refreshRec := env.JSON(t, http.MethodPost, "/auth/refresh", "", map[string]string{
 		"refresh_token": refreshToken,

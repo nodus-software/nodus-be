@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/pquerna/otp/totp"
@@ -83,7 +84,7 @@ func ptr(s string) *string { return &s }
 // Login is step 1: validate credentials and, if valid, issue an MFA
 // challenge. It never establishes a session by itself.
 func (s *Service) Login(ctx context.Context, req LoginRequest, ip string) (*LoginChallengeResponse, error) {
-	user, err := s.repo.GetUserByUsername(ctx, req.Username)
+	user, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		if !errors.Is(err, ErrUserNotFound) {
 			return nil, err
@@ -399,9 +400,17 @@ func (s *Service) Me(ctx context.Context, userID string) (*UserProfileResponse, 
 	if err != nil {
 		return nil, err
 	}
-	perms, err := s.repo.GetEffectivePermissionsByUser(ctx, userID)
-	if err != nil {
-		return nil, err
+	// Superuser roles carry no explicit role_permissions rows — they're authorized via
+	// the "*" wildcard (see Authorize) instead. Mirror that here so the profile reflects
+	// the same effective access as the rest of the API, not an empty permissions list.
+	var perms []string
+	if slices.ContainsFunc(roles, func(r Role) bool { return r.IsSuperuserRole }) {
+		perms = []string{"*"}
+	} else {
+		perms, err = s.repo.GetEffectivePermissionsByUser(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	factors, err := s.repo.ListMFAFactorsByUser(ctx, userID)
 	if err != nil {

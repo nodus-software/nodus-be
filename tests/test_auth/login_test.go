@@ -11,7 +11,7 @@ func TestLogin_GoldenPath_IssuesChallenge(t *testing.T) {
 	env.EnrollTOTP(t, userID)
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-		"username": "jdoe", "password": "Sup3rSecret!Pass",
+		"email": "jdoe@example.com", "password": "Sup3rSecret!Pass",
 	})
 
 	if rec.Code != http.StatusOK {
@@ -38,7 +38,7 @@ func TestLogin_WrongPassword_Returns401(t *testing.T) {
 	env.EnrollTOTP(t, userID)
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-		"username": "jdoe", "password": "wrong-password",
+		"email": "jdoe@example.com", "password": "wrong-password",
 	})
 
 	if rec.Code != http.StatusUnauthorized {
@@ -50,7 +50,7 @@ func TestLogin_UnknownUsername_Returns401(t *testing.T) {
 	env := Setup(t)
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-		"username": "nobody", "password": "whatever123",
+		"email": "nobody@example.com", "password": "whatever123",
 	})
 
 	if rec.Code != http.StatusUnauthorized {
@@ -63,7 +63,7 @@ func TestLogin_NoMFAEnrolled_Returns401(t *testing.T) {
 	env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 
 	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-		"username": "jdoe", "password": "Sup3rSecret!Pass",
+		"email": "jdoe@example.com", "password": "Sup3rSecret!Pass",
 	})
 
 	if rec.Code != http.StatusUnauthorized {
@@ -74,7 +74,7 @@ func TestLogin_NoMFAEnrolled_Returns401(t *testing.T) {
 func TestLogin_MissingFields_Returns422(t *testing.T) {
 	env := Setup(t)
 
-	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{"username": "jdoe"})
+	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{"email": "jdoe@example.com"})
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
@@ -89,13 +89,13 @@ func TestLogin_AccountLocksAfterMaxFailedAttempts(t *testing.T) {
 	maxAttempts := env.Cfg.LockoutMaxAttempts
 	for i := 0; i < maxAttempts; i++ {
 		env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-			"username": "jdoe", "password": "wrong-password",
+			"email": "jdoe@example.com", "password": "wrong-password",
 		})
 	}
 
 	// One more attempt (even with the CORRECT password) must now be locked.
 	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
-		"username": "jdoe", "password": "Sup3rSecret!Pass",
+		"email": "jdoe@example.com", "password": "Sup3rSecret!Pass",
 	})
 	if rec.Code != http.StatusLocked {
 		t.Fatalf("expected 423 after %d failed attempts, got %d: %s", maxAttempts, rec.Code, rec.Body.String())

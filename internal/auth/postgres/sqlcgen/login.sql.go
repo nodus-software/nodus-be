@@ -63,6 +63,38 @@ func (q *Queries) GetLoginChallengeByHash(ctx context.Context, challengeTokenHas
 	return i, err
 }
 
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE tenant_id = $1 AND email = $2
+`
+
+type GetUserByEmailParams struct {
+	TenantID string `json:"tenant_id"`
+	Email    string `json:"email"`
+}
+
+func (q *Queries) GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, arg.TenantID, arg.Email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.FullName,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.ProviderIdentifier,
+		&i.Status,
+		&i.FailedLoginAttempts,
+		&i.LockedUntil,
+		&i.PasswordChangedAt,
+		&i.LastAccessReviewAt,
+		&i.NextAccessReviewDue,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TenantID,
+	)
+	return i, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
 SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE tenant_id = $1 AND id = $2
 `
