@@ -1,0 +1,11 @@
+{{define "content"}}ACCOUNT REACTIVATION
+
+Hi {{.RecipientName}},
+
+An administrator has approved reactivation of your {{.OrganizationName}} account.
+
+Set up a new password and multi-factor authentication: {{.ReactivationURL}}
+
+This link expires on {{formatTime .ExpiresAt}} and can only be used once.
+
+If you were not expecting this, ignore this email and contact {{.OrganizationName}}.{{end}}

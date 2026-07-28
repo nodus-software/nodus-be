@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activateReactivatedUser = `-- name: ActivateReactivatedUser :exec
+UPDATE users
+SET status = 'active', password_hash = $2, password_changed_at = now(),
+    deactivated_at = NULL, last_access_review_at = $3, next_access_review_due = $4
+WHERE id = $1 AND status = 'deactivated'
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+type ActivateReactivatedUserParams struct {
+	ID                  string             `json:"id"`
+	PasswordHash        *string            `json:"password_hash"`
+	LastAccessReviewAt  pgtype.Timestamptz `json:"last_access_review_at"`
+	NextAccessReviewDue pgtype.Timestamptz `json:"next_access_review_due"`
+}
+
+func (q *Queries) ActivateReactivatedUser(ctx context.Context, arg ActivateReactivatedUserParams) error {
+	_, err := q.db.Exec(ctx, activateReactivatedUser,
+		arg.ID,
+		arg.PasswordHash,
+		arg.LastAccessReviewAt,
+		arg.NextAccessReviewDue,
+	)
+	return err
+}
+
 const activateUserWithPassword = `-- name: ActivateUserWithPassword :exec
 UPDATE users SET status = 'active', password_hash = $2, password_changed_at = now()
 WHERE id = $1
@@ -56,6 +81,31 @@ WHERE id = $1
 
 func (q *Queries) ConsumeInvitation(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, consumeInvitation, id)
+	return err
+}
+
+const consumeReactivationToken = `-- name: ConsumeReactivationToken :execrows
+UPDATE reactivation_tokens SET used_at = now()
+WHERE id = $1 AND used_at IS NULL AND expires_at > now()
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ConsumeReactivationToken(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, consumeReactivationToken, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const consumeReactivationTokensByUser = `-- name: ConsumeReactivationTokensByUser :exec
+UPDATE reactivation_tokens SET used_at = now()
+WHERE user_id = $1 AND used_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ConsumeReactivationTokensByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, consumeReactivationTokensByUser, userID)
 	return err
 }
 
@@ -108,7 +158,7 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 const createInvitedUser = `-- name: CreateInvitedUser :one
 INSERT INTO users (id, full_name, username, email, provider_identifier, status)
 VALUES ($1, $2, $3, $4, $5, 'invited')
-RETURNING id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id
+RETURNING id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at
 `
 
 type CreateInvitedUserParams struct {
@@ -144,8 +194,44 @@ func (q *Queries) CreateInvitedUser(ctx context.Context, arg CreateInvitedUserPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 	)
 	return i, err
+}
+
+const createReactivationToken = `-- name: CreateReactivationToken :exec
+INSERT INTO reactivation_tokens (id, user_id, requested_by, token_hash, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type CreateReactivationTokenParams struct {
+	ID          string             `json:"id"`
+	UserID      string             `json:"user_id"`
+	RequestedBy string             `json:"requested_by"`
+	TokenHash   string             `json:"token_hash"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateReactivationToken(ctx context.Context, arg CreateReactivationTokenParams) error {
+	_, err := q.db.Exec(ctx, createReactivationToken,
+		arg.ID,
+		arg.UserID,
+		arg.RequestedBy,
+		arg.TokenHash,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const deletePendingUser = `-- name: DeletePendingUser :exec
+DELETE FROM users
+WHERE id = $1 AND status = 'invited' AND password_hash IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) DeletePendingUser(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deletePendingUser, id)
+	return err
 }
 
 const getInvitationByTokenHash = `-- name: GetInvitationByTokenHash :one
@@ -193,6 +279,28 @@ func (q *Queries) GetLatestInvitationByUserID(ctx context.Context, userID string
 	return i, err
 }
 
+const getReactivationTokenByHash = `-- name: GetReactivationTokenByHash :one
+SELECT id, tenant_id, user_id, requested_by, token_hash, expires_at, used_at, created_at FROM reactivation_tokens
+WHERE token_hash = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) GetReactivationTokenByHash(ctx context.Context, tokenHash string) (ReactivationToken, error) {
+	row := q.db.QueryRow(ctx, getReactivationTokenByHash, tokenHash)
+	var i ReactivationToken
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.UserID,
+		&i.RequestedBy,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getRolesByIDs = `-- name: GetRolesByIDs :many
 SELECT id, name, description, is_superuser_role, requires_provider_identifier, created_at, updated_at, tenant_id FROM roles
 WHERE id::text = ANY($1::text[])
@@ -229,7 +337,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users
 WHERE tenant_id = $1
   AND email = $2
 `
@@ -258,12 +366,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users
 WHERE id = $1
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
@@ -287,6 +396,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 	)
 	return i, err
 }
@@ -318,6 +428,28 @@ func (q *Queries) GetUserRoleNames(ctx context.Context, userID string) ([]string
 		return nil, err
 	}
 	return items, nil
+}
+
+const resetMFABackupCodesByUser = `-- name: ResetMFABackupCodesByUser :exec
+DELETE FROM mfa_backup_codes
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ResetMFABackupCodesByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, resetMFABackupCodesByUser, userID)
+	return err
+}
+
+const resetMFAByUser = `-- name: ResetMFAByUser :exec
+DELETE FROM mfa_factors
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ResetMFAByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, resetMFAByUser, userID)
+	return err
 }
 
 const restoreInvitedUser = `-- name: RestoreInvitedUser :exec

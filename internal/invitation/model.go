@@ -5,9 +5,10 @@ import "time"
 type UserStatus string
 
 const (
-	UserStatusInvited   UserStatus = "invited"
-	UserStatusActive    UserStatus = "active"
-	UserStatusSuspended UserStatus = "suspended"
+	UserStatusInvited     UserStatus = "invited"
+	UserStatusActive      UserStatus = "active"
+	UserStatusSuspended   UserStatus = "suspended"
+	UserStatusDeactivated UserStatus = "deactivated"
 )
 
 // Invitation is the single-use, hashed-at-rest token issued when an admin
@@ -34,6 +35,19 @@ type EnrollmentToken struct {
 	TokenHash string
 	ExpiresAt time.Time
 }
+
+type ReactivationToken struct {
+	ID          string
+	UserID      string
+	RequestedBy string
+	TokenHash   string
+	ExpiresAt   time.Time
+	UsedAt      *time.Time
+	CreatedAt   time.Time
+}
+
+func (t *ReactivationToken) IsExpired(now time.Time) bool { return now.After(t.ExpiresAt) }
+func (t *ReactivationToken) IsUsed() bool                 { return t.UsedAt != nil }
 
 // Role is the subset of role data this domain needs to validate role_ids
 // on invite: existence, and whether the role requires the invitee carry a

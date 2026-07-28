@@ -541,7 +541,7 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: role, in: query, schema: { type: string } }
-        - { name: status, in: query, schema: { type: string, enum: [active, invited, suspended, pending_review] } }
+        - { name: status, in: query, schema: { type: string, enum: [active, invited, suspended, pending_review, deactivated] } }
         - { name: stale_access, in: query, schema: { type: boolean }, description: "Users whose access hasn't been reviewed within the quarterly cycle" }
       responses:
         "200":
@@ -662,6 +662,22 @@ paths:
       responses:
         "204": { description: "New invitation sent; prior token invalidated" }
 
+  /users/invitations/{userId}/cancel:
+    post:
+      tags: [Users]
+      summary: Cancel an unaccepted staff invitation
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LifecycleReasonRequest" }
+      responses:
+        "204": { description: Invitation cancelled and pending account removed }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /users/{userId}:
     patch:
       tags: [Users]
@@ -710,6 +726,76 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UserProfileResponse" }
+
+  /users/{userId}/deactivate:
+    post:
+      tags: [Users]
+      summary: Permanently deactivate a staff account while retaining record attribution
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LifecycleReasonRequest" }
+      responses:
+        "200":
+          description: Account deactivated and all credentials revoked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserProfileResponse" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /users/{userId}/reactivate:
+    post:
+      tags: [Users]
+      summary: Issue a one-time link for fresh password and MFA setup
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LifecycleReasonRequest" }
+      responses:
+        "204": { description: Reactivation link sent; account remains deactivated }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /users/reactivations/{token}:
+    get:
+      tags: [Users]
+      summary: Validate a reactivation token
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Reactivation token is valid }
+        "410": { $ref: "#/components/responses/Gone" }
+
+  /users/reactivations/{token}/accept:
+    post:
+      tags: [Users]
+      summary: Set a fresh password and begin mandatory MFA reenrollment
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Account reactivated; returns an MFA enrollment token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentTokenResponse" }
+        "410": { $ref: "#/components/responses/Gone" }
 
   /roles:
     get:
@@ -872,6 +958,12 @@ components:
       required: [enrollment_token]
       properties:
         enrollment_token: { type: string }
+
+    LifecycleReasonRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 500 }
 
     LoginChallenge:
       type: object
@@ -1095,7 +1187,8 @@ components:
         provider_identifier: { type: string }
         roles: { type: array, items: { type: string } }
         permissions: { type: array, items: { type: string }, description: "Effective permissions resolved from roles" }
-        status: { type: string, enum: [invited, active, suspended, pending_review] }
+        status: { type: string, enum: [invited, active, suspended, pending_review, deactivated] }
+        deactivated_at: { type: string, format: date-time, nullable: true }
         mfa_enrolled: { type: boolean }
         last_access_review_at: { type: string, format: date-time }
         next_access_review_due: { type: string, format: date-time }

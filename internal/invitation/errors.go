@@ -11,6 +11,9 @@ var (
 	ErrPasswordPolicyViolation    = errors.New("password does not meet policy requirements")
 	ErrUserNotFound               = errors.New("user not found")
 	ErrNotPending                 = errors.New("invitation is not pending")
+	ErrNotDeactivated             = errors.New("account is not deactivated")
+	ErrReactivationTokenInvalid   = errors.New("reactivation link invalid, expired, or already used")
+	ErrReactivationTokenExpired   = errors.New("reactivation link expired")
 )
 
 // PolicyViolationError wraps ErrPasswordPolicyViolation with the specific

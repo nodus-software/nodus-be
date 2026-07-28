@@ -36,14 +36,80 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 		response.Validation(w, map[string]string{"provider_identifier": err.Error()})
 	case errors.Is(err, ErrEmailAlreadyExists), errors.Is(err, ErrNotPending):
 		response.Conflict(w, err.Error())
+	case errors.Is(err, ErrNotDeactivated):
+		response.Conflict(w, err.Error())
 	case errors.Is(err, ErrTokenExpired):
 		response.Error(w, http.StatusGone, "INVITATION_EXPIRED", err.Error())
+	case errors.Is(err, ErrReactivationTokenExpired):
+		response.Error(w, http.StatusGone, "REACTIVATION_EXPIRED", err.Error())
 	case errors.Is(err, ErrTokenInvalid):
+		response.BadRequest(w, err.Error())
+	case errors.Is(err, ErrReactivationTokenInvalid):
 		response.BadRequest(w, err.Error())
 	default:
 		h.log.Error("unexpected invitation domain error", "error", err.Error())
 		response.Internal(w)
 	}
+}
+
+func (h *Handler) RequestReactivation(w http.ResponseWriter, r *http.Request) {
+	ac, ok := middleware.AuthFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	req, ok := bindJSON[LifecycleReasonRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.RequestReactivation(r.Context(), ac.UserID, chi.URLParam(r, "userId"), req.Reason); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.NoContent(w)
+}
+
+func (h *Handler) ValidateReactivation(w http.ResponseWriter, r *http.Request) {
+	preview, err := h.service.ValidateReactivation(r.Context(), chi.URLParam(r, "token"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.OK(w, preview)
+}
+
+func (h *Handler) AcceptReactivation(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[AcceptReactivationRequest](w, r)
+	if !ok {
+		return
+	}
+	if req.Token != chi.URLParam(r, "token") {
+		h.writeError(w, ErrReactivationTokenInvalid)
+		return
+	}
+	enrollment, err := h.service.AcceptReactivation(r.Context(), req.Token, req.Password)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.OK(w, enrollment)
+}
+
+func (h *Handler) CancelInvitation(w http.ResponseWriter, r *http.Request) {
+	ac, ok := middleware.AuthFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	req, ok := bindJSON[LifecycleReasonRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.CancelInvitation(r.Context(), ac.UserID, chi.URLParam(r, "userId"), req.Reason); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.NoContent(w)
 }
 
 // Invite handles POST /users/invitations (admin only).

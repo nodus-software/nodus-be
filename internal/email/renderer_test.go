@@ -33,6 +33,9 @@ func TestRendererRendersActiveTemplates(t *testing.T) {
 		{"password reset", func() (Rendered, error) {
 			return r.RenderPasswordReset(PasswordResetData{CommonData: CommonData{RecipientName: "Amina"}, ResetURL: "https://app.example.test/reset?t=secret", ExpiresAt: expires})
 		}, "Reset your Nodus Health password", "/reset?t=secret"},
+		{"account reactivation", func() (Rendered, error) {
+			return r.RenderAccountReactivation(AccountReactivationData{CommonData: CommonData{RecipientName: "Amina", OrganizationName: "Nodus Clinic"}, ReactivationURL: "https://app.example.test/reactivate?t=secret", ExpiresAt: expires})
+		}, "Reactivate your Nodus Health account", "/reactivate?t=secret"},
 	}
 
 	for _, tt := range tests {

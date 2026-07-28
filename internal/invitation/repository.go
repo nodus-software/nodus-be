@@ -1,6 +1,9 @@
 package invitation
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Repository persists everything the Invitation domain owns: the pending
 // user record created by an invite, role assignment at invite time,
@@ -23,6 +26,14 @@ type Repository interface {
 	ActivateUserWithPassword(ctx context.Context, userID, passwordHash string) error
 	RestoreInvitedUser(ctx context.Context, userID string) error
 	CreateEnrollmentToken(ctx context.Context, token EnrollmentToken) error
+	CreateReactivationToken(ctx context.Context, token ReactivationToken) error
+	GetReactivationTokenByHash(ctx context.Context, tokenHash string) (*ReactivationToken, error)
+	ConsumeReactivationToken(ctx context.Context, id string) error
+	ConsumeReactivationTokensByUser(ctx context.Context, userID string) error
+	ResetMFAByUser(ctx context.Context, userID string) error
+	ResetMFABackupCodesByUser(ctx context.Context, userID string) error
+	ActivateReactivatedUser(ctx context.Context, userID, passwordHash string, reviewedAt, nextReview time.Time) error
+	DeletePendingUser(ctx context.Context, userID string) error
 
 	// WithinTx runs fn with a Repository bound to a single database
 	// transaction, committing on nil and rolling back otherwise.

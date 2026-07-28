@@ -70,3 +70,44 @@ WHERE id = $1
 -- name: CreateEnrollmentToken :exec
 INSERT INTO enrollment_tokens (id, user_id, token_hash, expires_at)
 VALUES ($1, $2, $3, $4);
+
+-- name: CreateReactivationToken :exec
+INSERT INTO reactivation_tokens (id, user_id, requested_by, token_hash, expires_at)
+VALUES ($1, $2, $3, $4, $5);
+
+-- name: GetReactivationTokenByHash :one
+SELECT * FROM reactivation_tokens
+WHERE token_hash = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ConsumeReactivationToken :execrows
+UPDATE reactivation_tokens SET used_at = now()
+WHERE id = $1 AND used_at IS NULL AND expires_at > now()
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ConsumeReactivationTokensByUser :exec
+UPDATE reactivation_tokens SET used_at = now()
+WHERE user_id = $1 AND used_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ResetMFAByUser :exec
+DELETE FROM mfa_factors
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ResetMFABackupCodesByUser :exec
+DELETE FROM mfa_backup_codes
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ActivateReactivatedUser :exec
+UPDATE users
+SET status = 'active', password_hash = $2, password_changed_at = now(),
+    deactivated_at = NULL, last_access_review_at = $3, next_access_review_due = $4
+WHERE id = $1 AND status = 'deactivated'
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: DeletePendingUser :exec
+DELETE FROM users
+WHERE id = $1 AND status = 'invited' AND password_hash IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;

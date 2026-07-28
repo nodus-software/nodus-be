@@ -15,6 +15,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 
 		r.With(middleware.RequirePermission("users:read")).Get("/users", h.ListUsers)
 		r.With(middleware.RequirePermission("users:write")).Patch("/users/{userId}", h.UpdateUser)
+		r.With(middleware.RequirePermission("users:deactivate")).Post("/users/{userId}/deactivate", h.DeactivateUser)
 		r.With(middleware.RequirePermission("users:review")).Post("/users/{userId}/access-review", h.RecordAccessReview)
 		r.With(middleware.RequirePermission("users:unlock")).Post("/users/{userId}/unlock", h.UnlockUser)
 	})

@@ -64,7 +64,7 @@ func (q *Queries) GetLoginChallengeByHash(ctx context.Context, challengeTokenHas
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE tenant_id = $1 AND email = $2
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users WHERE tenant_id = $1 AND email = $2
 `
 
 type GetUserByEmailParams struct {
@@ -91,12 +91,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE tenant_id = $1 AND id = $2
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users WHERE tenant_id = $1 AND id = $2
 `
 
 type GetUserByIDParams struct {
@@ -123,12 +124,13 @@ func (q *Queries) GetUserByID(ctx context.Context, arg GetUserByIDParams) (User,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users WHERE tenant_id = $1 AND username = $2
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users WHERE tenant_id = $1 AND username = $2
 `
 
 type GetUserByUsernameParams struct {
@@ -155,6 +157,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, arg GetUserByUsernamePa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 	)
 	return i, err
 }

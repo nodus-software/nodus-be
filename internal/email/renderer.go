@@ -29,6 +29,7 @@ const (
 	OrganizationActivation Kind = "organization_activation"
 	StaffInvitation        Kind = "staff_invitation"
 	PasswordResetRequested Kind = "password_reset_requested"
+	AccountReactivation    Kind = "account_reactivation"
 )
 
 type CommonData struct {
@@ -65,6 +66,12 @@ type PasswordResetData struct {
 	CommonData
 	ResetURL  string
 	ExpiresAt time.Time
+}
+
+type AccountReactivationData struct {
+	CommonData
+	ReactivationURL string
+	ExpiresAt       time.Time
 }
 
 type Rendered struct {
@@ -121,6 +128,15 @@ func (r *Renderer) RenderPasswordReset(data PasswordResetData) (Rendered, error)
 	data.CTALabel = "Reset password"
 	data.Preheader = fmt.Sprintf("Reset the password for your %s account.", data.AppName)
 	return r.render(PasswordResetRequested, "Reset your "+data.AppName+" password", data)
+}
+
+func (r *Renderer) RenderAccountReactivation(data AccountReactivationData) (Rendered, error) {
+	data.CommonData = r.withDefaults(data.CommonData)
+	data.Heading = "Reactivate your account"
+	data.CTAURL = data.ReactivationURL
+	data.CTALabel = "Set up account access"
+	data.Preheader = fmt.Sprintf("Set up fresh credentials for your %s account.", data.AppName)
+	return r.render(AccountReactivation, "Reactivate your "+data.AppName+" account", data)
 }
 
 func (r *Renderer) withDefaults(data CommonData) CommonData {

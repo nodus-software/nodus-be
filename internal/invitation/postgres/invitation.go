@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -22,6 +23,14 @@ func invitationFromRow(i sqlcgen.Invitation) *invitation.Invitation {
 		ID: i.ID, UserID: i.UserID, InvitedBy: i.InvitedBy, TokenHash: i.TokenHash,
 		ExpiresAt: fromTimestamptz(i.ExpiresAt), UsedAt: fromNullTimestamptz(i.UsedAt),
 		CreatedAt: fromTimestamptz(i.CreatedAt),
+	}
+}
+
+func reactivationTokenFromRow(t sqlcgen.ReactivationToken) *invitation.ReactivationToken {
+	return &invitation.ReactivationToken{
+		ID: t.ID, UserID: t.UserID, RequestedBy: t.RequestedBy, TokenHash: t.TokenHash,
+		ExpiresAt: fromTimestamptz(t.ExpiresAt), UsedAt: fromNullTimestamptz(t.UsedAt),
+		CreatedAt: fromTimestamptz(t.CreatedAt),
 	}
 }
 
@@ -131,4 +140,56 @@ func (r *Repository) CreateEnrollmentToken(ctx context.Context, token invitation
 	return r.q(ctx).CreateEnrollmentToken(ctx, sqlcgen.CreateEnrollmentTokenParams{
 		ID: token.ID, UserID: token.UserID, TokenHash: token.TokenHash, ExpiresAt: toTimestamptz(token.ExpiresAt),
 	})
+}
+
+func (r *Repository) CreateReactivationToken(ctx context.Context, token invitation.ReactivationToken) error {
+	return r.q(ctx).CreateReactivationToken(ctx, sqlcgen.CreateReactivationTokenParams{
+		ID: token.ID, UserID: token.UserID, RequestedBy: token.RequestedBy,
+		TokenHash: token.TokenHash, ExpiresAt: toTimestamptz(token.ExpiresAt),
+	})
+}
+
+func (r *Repository) GetReactivationTokenByHash(ctx context.Context, tokenHash string) (*invitation.ReactivationToken, error) {
+	row, err := r.q(ctx).GetReactivationTokenByHash(ctx, tokenHash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, invitation.ErrReactivationTokenInvalid
+		}
+		return nil, err
+	}
+	return reactivationTokenFromRow(row), nil
+}
+
+func (r *Repository) ConsumeReactivationToken(ctx context.Context, id string) error {
+	rows, err := r.q(ctx).ConsumeReactivationToken(ctx, id)
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return invitation.ErrReactivationTokenInvalid
+	}
+	return nil
+}
+
+func (r *Repository) ConsumeReactivationTokensByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).ConsumeReactivationTokensByUser(ctx, userID)
+}
+
+func (r *Repository) ResetMFAByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).ResetMFAByUser(ctx, userID)
+}
+
+func (r *Repository) ResetMFABackupCodesByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).ResetMFABackupCodesByUser(ctx, userID)
+}
+
+func (r *Repository) ActivateReactivatedUser(ctx context.Context, userID, passwordHash string, reviewedAt, nextReview time.Time) error {
+	return r.q(ctx).ActivateReactivatedUser(ctx, sqlcgen.ActivateReactivatedUserParams{
+		ID: userID, PasswordHash: &passwordHash, LastAccessReviewAt: toTimestamptz(reviewedAt),
+		NextAccessReviewDue: toTimestamptz(nextReview),
+	})
+}
+
+func (r *Repository) DeletePendingUser(ctx context.Context, userID string) error {
+	return r.q(ctx).DeletePendingUser(ctx, userID)
 }

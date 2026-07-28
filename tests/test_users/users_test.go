@@ -130,3 +130,54 @@ func TestUsersRoutesRequirePermission(t *testing.T) {
 		t.Fatalf("expected 403 without users:read, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestDeactivateUser_RetainsProfileAndChangesStatus(t *testing.T) {
+	env := Setup(t)
+	target := env.CreateUser(t, users.StatusActive)
+	_, actorToken := env.NewActor(t, false, "users:deactivate")
+
+	rec := env.JSON(t, http.MethodPost, "/users/"+target+"/deactivate", actorToken, users.LifecycleReasonRequest{
+		Reason: "employment ended",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var profile users.UserProfileResponse
+	Decode(t, rec, &profile)
+	if profile.Status != "deactivated" || profile.DeactivatedAt == nil {
+		t.Fatalf("expected retained deactivated profile, got %+v", profile)
+	}
+	if _, ok := env.Repo.users[target]; !ok {
+		t.Fatal("expected the staff identity row to be retained")
+	}
+}
+
+func TestDeactivateUser_LastActiveSuperuser_Returns409(t *testing.T) {
+	env := Setup(t)
+	target := env.CreateUser(t, users.StatusActive)
+	env.Repo.superusers[target] = true
+	_, actorToken := env.NewActor(t, false, "users:deactivate")
+
+	rec := env.JSON(t, http.MethodPost, "/users/"+target+"/deactivate", actorToken, users.LifecycleReasonRequest{
+		Reason: "employment ended",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if env.Repo.users[target].Status != users.StatusActive {
+		t.Fatal("expected last superuser to remain active")
+	}
+}
+
+func TestDeactivateUser_SelfDeactivation_Returns409(t *testing.T) {
+	env := Setup(t)
+	actorID, actorToken := env.NewActor(t, false, "users:deactivate")
+	env.Repo.users[actorID] = users.User{ID: actorID, Status: users.StatusActive}
+
+	rec := env.JSON(t, http.MethodPost, "/users/"+actorID+"/deactivate", actorToken, users.LifecycleReasonRequest{
+		Reason: "test",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}

@@ -34,6 +34,7 @@ type Config struct {
 	BcryptCost         int
 	OrganizationName   string
 	PasswordPolicy     auth.PasswordPolicy
+	AccessReviewCycle  time.Duration
 }
 
 type Service struct {
@@ -169,7 +170,7 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 
 	_ = s.audit.Record(ctx, audit.Entry{
 		UserID: &actorUserID, Action: "user_invited", Result: audit.ResultSuccess,
-		TargetResource: userID, Metadata: map[string]any{"email": req.Email},
+		TargetResource: userID,
 	})
 
 	roleNames, err := s.repo.GetUserRoleNames(ctx, userID)
@@ -182,6 +183,170 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 		ProviderIdentifier: providerIdentifier, Roles: roleNames, Permissions: []string{},
 		Status: string(UserStatusInvited), MFAEnrolled: false,
 	}, nil
+}
+
+func (s *Service) reactivationLink(ctx context.Context, rawToken string) (string, error) {
+	identity, ok := tenant.FromContext(ctx)
+	if !ok {
+		return "", tenant.ErrMissing
+	}
+	return fmt.Sprintf("%s/reactivate?token=%s&tenant=%s", strings.TrimRight(s.cfg.BaseURL, "/"), url.QueryEscape(rawToken), url.QueryEscape(identity.Slug)), nil
+}
+
+func (s *Service) sendReactivationEmail(ctx context.Context, user *PendingUser, link string, expiresAt time.Time) {
+	rendered, err := s.email.RenderAccountReactivation(email.AccountReactivationData{
+		CommonData:      email.CommonData{RecipientName: user.FullName, OrganizationName: s.cfg.OrganizationName},
+		ReactivationURL: link, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		s.log.Error("failed to render account reactivation email", "error", err.Error())
+		return
+	}
+	if err := s.mailer.SendHTML(ctx, user.Email, rendered.Subject, rendered.Text, rendered.HTML); err != nil {
+		s.log.Error("failed to send account reactivation email", "error", err.Error())
+	}
+}
+
+// RequestReactivation keeps the account inaccessible while issuing a
+// one-time link for fresh password and MFA setup.
+func (s *Service) RequestReactivation(ctx context.Context, actorUserID, targetUserID, reason string) error {
+	user, err := s.repo.GetUserByID(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+	if user.Status != UserStatusDeactivated {
+		return ErrNotDeactivated
+	}
+	rawToken, err := security.GenerateToken()
+	if err != nil {
+		return err
+	}
+	tokenID, err := utility.GenerateUUID()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	expiresAt := now.Add(s.cfg.InviteTokenTTL)
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if err := repo.ConsumeReactivationTokensByUser(ctx, targetUserID); err != nil {
+			return err
+		}
+		return repo.CreateReactivationToken(ctx, ReactivationToken{
+			ID: tokenID, UserID: targetUserID, RequestedBy: actorUserID,
+			TokenHash: security.HashToken(rawToken), ExpiresAt: expiresAt,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	link, err := s.reactivationLink(ctx, rawToken)
+	if err != nil {
+		return err
+	}
+	s.sendReactivationEmail(ctx, user, link, expiresAt)
+	_ = s.audit.Record(ctx, audit.Entry{
+		UserID: &actorUserID, Action: "user_reactivation_requested", Result: audit.ResultSuccess,
+		TargetResource: targetUserID, Metadata: map[string]any{"reason": reason},
+	})
+	return nil
+}
+
+func (s *Service) ValidateReactivation(ctx context.Context, rawToken string) (*ValidateReactivationResponse, error) {
+	token, err := s.repo.GetReactivationTokenByHash(ctx, security.HashToken(rawToken))
+	if err != nil {
+		return nil, err
+	}
+	if token.IsUsed() {
+		return nil, ErrReactivationTokenInvalid
+	}
+	if token.IsExpired(time.Now()) {
+		return nil, ErrReactivationTokenExpired
+	}
+	user, err := s.repo.GetUserByID(ctx, token.UserID)
+	if err != nil || user.Status != UserStatusDeactivated {
+		return nil, ErrReactivationTokenInvalid
+	}
+	return &ValidateReactivationResponse{FullName: user.FullName, Email: user.Email, Organization: s.cfg.OrganizationName}, nil
+}
+
+func (s *Service) AcceptReactivation(ctx context.Context, rawToken, password string) (*EnrollmentTokenResponse, error) {
+	token, err := s.repo.GetReactivationTokenByHash(ctx, security.HashToken(rawToken))
+	if err != nil {
+		return nil, err
+	}
+	if token.IsUsed() {
+		return nil, ErrReactivationTokenInvalid
+	}
+	now := time.Now()
+	if token.IsExpired(now) {
+		return nil, ErrReactivationTokenExpired
+	}
+	user, err := s.repo.GetUserByID(ctx, token.UserID)
+	if err != nil || user.Status != UserStatusDeactivated {
+		return nil, ErrReactivationTokenInvalid
+	}
+	if violations := auth.ValidatePasswordPolicy(password, s.cfg.PasswordPolicy); len(violations) > 0 {
+		return nil, &PolicyViolationError{Violations: violations}
+	}
+	passwordHash, err := security.HashPassword(password, s.cfg.BcryptCost)
+	if err != nil {
+		return nil, err
+	}
+	rawEnrollment, err := security.GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	enrollmentID, err := utility.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if err := repo.ConsumeReactivationToken(ctx, token.ID); err != nil {
+			return err
+		}
+		if err := repo.ConsumeReactivationTokensByUser(ctx, token.UserID); err != nil {
+			return err
+		}
+		if err := repo.ResetMFABackupCodesByUser(ctx, token.UserID); err != nil {
+			return err
+		}
+		if err := repo.ResetMFAByUser(ctx, token.UserID); err != nil {
+			return err
+		}
+		if err := repo.ActivateReactivatedUser(ctx, token.UserID, passwordHash, now, now.Add(s.cfg.AccessReviewCycle)); err != nil {
+			return err
+		}
+		return repo.CreateEnrollmentToken(ctx, EnrollmentToken{
+			ID: enrollmentID, UserID: token.UserID, TokenHash: security.HashToken(rawEnrollment),
+			ExpiresAt: now.Add(s.cfg.EnrollmentTokenTTL),
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.audit.Record(ctx, audit.Entry{
+		UserID: &token.UserID, Action: "user_reactivated", Result: audit.ResultSuccess,
+		TargetResource: token.UserID, Metadata: map[string]any{"requested_by": token.RequestedBy},
+	})
+	return &EnrollmentTokenResponse{EnrollmentToken: rawEnrollment}, nil
+}
+
+func (s *Service) CancelInvitation(ctx context.Context, actorUserID, targetUserID, reason string) error {
+	user, err := s.repo.GetUserByID(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+	if user.Status != UserStatusInvited || user.PasswordSet {
+		return ErrNotPending
+	}
+	if err := s.repo.DeletePendingUser(ctx, targetUserID); err != nil {
+		return err
+	}
+	_ = s.audit.Record(ctx, audit.Entry{
+		UserID: &actorUserID, Action: "invitation_cancelled", Result: audit.ResultSuccess,
+		TargetResource: targetUserID, Metadata: map[string]any{"reason": reason},
+	})
+	return nil
 }
 
 // ValidateToken previews an invitation before the accept-invite page is

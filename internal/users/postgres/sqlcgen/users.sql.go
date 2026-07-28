@@ -11,6 +11,73 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeEnrollmentTokensByUser = `-- name: ConsumeEnrollmentTokensByUser :exec
+UPDATE enrollment_tokens SET consumed_at = now()
+WHERE user_id = $1 AND consumed_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ConsumeEnrollmentTokensByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, consumeEnrollmentTokensByUser, userID)
+	return err
+}
+
+const consumeLoginChallengesByUser = `-- name: ConsumeLoginChallengesByUser :exec
+UPDATE login_challenges SET consumed_at = now()
+WHERE user_id = $1 AND consumed_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ConsumeLoginChallengesByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, consumeLoginChallengesByUser, userID)
+	return err
+}
+
+const consumePasswordResetTokensByUser = `-- name: ConsumePasswordResetTokensByUser :exec
+UPDATE password_reset_tokens SET used_at = now()
+WHERE user_id = $1 AND used_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ConsumePasswordResetTokensByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, consumePasswordResetTokensByUser, userID)
+	return err
+}
+
+const countOtherActiveSuperusers = `-- name: CountOtherActiveSuperusers :one
+SELECT count(*) FROM users u
+WHERE u.id <> $1 AND u.status = 'active'
+  AND u.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND EXISTS (
+    SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+    WHERE ur.user_id = u.id AND ur.tenant_id = u.tenant_id
+      AND r.tenant_id = u.tenant_id AND r.is_superuser_role = true
+  )
+`
+
+func (q *Queries) CountOtherActiveSuperusers(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, countOtherActiveSuperusers, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deactivateUser = `-- name: DeactivateUser :exec
+UPDATE users SET status = 'deactivated', deactivated_at = $2
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+type DeactivateUserParams struct {
+	ID            string             `json:"id"`
+	DeactivatedAt pgtype.Timestamptz `json:"deactivated_at"`
+}
+
+func (q *Queries) DeactivateUser(ctx context.Context, arg DeactivateUserParams) error {
+	_, err := q.db.Exec(ctx, deactivateUser, arg.ID, arg.DeactivatedAt)
+	return err
+}
+
 const deleteUserRoles = `-- name: DeleteUserRoles :exec
 DELETE FROM user_roles
 WHERE user_id = $1
@@ -58,7 +125,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id FROM users
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users
 WHERE id = $1
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
@@ -82,12 +149,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 	)
 	return i, err
 }
 
 const getUserWithRolesByID = `-- name: GetUserWithRolesByID :one
-SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id,
+SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id, u.deactivated_at,
     COALESCE(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}')::text[] AS role_names,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
@@ -125,6 +193,7 @@ type GetUserWithRolesByIDRow struct {
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	TenantID            string             `json:"tenant_id"`
+	DeactivatedAt       pgtype.Timestamptz `json:"deactivated_at"`
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
@@ -151,6 +220,7 @@ func (q *Queries) GetUserWithRolesByID(ctx context.Context, id string) (GetUserW
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.DeactivatedAt,
 		&i.RoleNames,
 		&i.PermissionCodes,
 		&i.MfaEnrolled,
@@ -200,7 +270,7 @@ func (q *Queries) InsertUserRole(ctx context.Context, arg InsertUserRoleParams) 
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id,
+SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id, u.deactivated_at,
     COALESCE(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}')::text[] AS role_names,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
@@ -255,6 +325,7 @@ type ListUsersRow struct {
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	TenantID            string             `json:"tenant_id"`
+	DeactivatedAt       pgtype.Timestamptz `json:"deactivated_at"`
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
@@ -287,6 +358,7 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.TenantID,
+			&i.DeactivatedAt,
 			&i.RoleNames,
 			&i.PermissionCodes,
 			&i.MfaEnrolled,
@@ -303,6 +375,15 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 	return items, nil
 }
 
+const lockUserLifecycle = `-- name: LockUserLifecycle :exec
+SELECT pg_advisory_xact_lock(hashtextextended(current_setting('app.tenant_id', true), 0))
+`
+
+func (q *Queries) LockUserLifecycle(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockUserLifecycle)
+	return err
+}
+
 const recordAccessReview = `-- name: RecordAccessReview :exec
 UPDATE users SET last_access_review_at = $2, next_access_review_due = $3
 WHERE id = $1
@@ -317,6 +398,28 @@ type RecordAccessReviewParams struct {
 
 func (q *Queries) RecordAccessReview(ctx context.Context, arg RecordAccessReviewParams) error {
 	_, err := q.db.Exec(ctx, recordAccessReview, arg.ID, arg.LastAccessReviewAt, arg.NextAccessReviewDue)
+	return err
+}
+
+const revokeRefreshTokensByUser = `-- name: RevokeRefreshTokensByUser :exec
+UPDATE refresh_tokens SET revoked_at = now()
+WHERE user_id = $1 AND revoked_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) RevokeRefreshTokensByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, revokeRefreshTokensByUser, userID)
+	return err
+}
+
+const revokeSessionsByUser = `-- name: RevokeSessionsByUser :exec
+UPDATE sessions SET revoked_at = now()
+WHERE user_id = $1 AND revoked_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) RevokeSessionsByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, revokeSessionsByUser, userID)
 	return err
 }
 

@@ -91,7 +91,7 @@ func Setup(t *testing.T) *Env {
 	renderer := email.NewRenderer(email.CommonData{AppName: "Nodus Health", AppURL: "https://app.test"})
 	service := invitation.NewService(repo, discardAudit{}, mailer, renderer, logger.NewLogger(), invitation.Config{
 		BaseURL: "https://app.test", InviteTokenTTL: 24 * time.Hour, EnrollmentTokenTTL: 30 * time.Minute,
-		BcryptCost: 4, OrganizationName: "Nodus Test",
+		BcryptCost: 4, OrganizationName: "Nodus Test", AccessReviewCycle: 90 * 24 * time.Hour,
 		PasswordPolicy: auth.PasswordPolicy{MinLength: 12, RequireUppercase: true, RequireNumber: true, RequireSymbol: true},
 	})
 	authorizer := &stubAuthorizer{permissions: map[string][]string{}}
@@ -170,13 +170,15 @@ func Decode(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 // giving handler tests deterministic isolated state.
 type memoryRepo struct {
 	sync.Mutex
-	users       map[string]invitation.PendingUser // by ID
-	usersByMail map[string]string                 // email -> userID
-	userRoles   map[string][]string               // userID -> role IDs
-	roles       map[string]invitation.Role
-	invitations map[string]invitation.Invitation // by ID
-	byTokenHash map[string]string                // tokenHash -> invitation ID
-	enrollments []invitation.EnrollmentToken
+	users              map[string]invitation.PendingUser // by ID
+	usersByMail        map[string]string                 // email -> userID
+	userRoles          map[string][]string               // userID -> role IDs
+	roles              map[string]invitation.Role
+	invitations        map[string]invitation.Invitation // by ID
+	byTokenHash        map[string]string                // tokenHash -> invitation ID
+	enrollments        []invitation.EnrollmentToken
+	reactivations      map[string]invitation.ReactivationToken
+	reactivationByHash map[string]string
 }
 
 func newMemoryRepo() *memoryRepo {
@@ -184,6 +186,7 @@ func newMemoryRepo() *memoryRepo {
 		users: map[string]invitation.PendingUser{}, usersByMail: map[string]string{},
 		userRoles: map[string][]string{}, roles: map[string]invitation.Role{},
 		invitations: map[string]invitation.Invitation{}, byTokenHash: map[string]string{},
+		reactivations: map[string]invitation.ReactivationToken{}, reactivationByHash: map[string]string{},
 	}
 }
 
@@ -311,6 +314,72 @@ func (r *memoryRepo) RestoreInvitedUser(_ context.Context, userID string) error 
 
 func (r *memoryRepo) CreateEnrollmentToken(_ context.Context, token invitation.EnrollmentToken) error {
 	r.enrollments = append(r.enrollments, token)
+	return nil
+}
+
+func (r *memoryRepo) CreateReactivationToken(_ context.Context, token invitation.ReactivationToken) error {
+	token.CreatedAt = time.Now()
+	r.reactivations[token.ID] = token
+	r.reactivationByHash[token.TokenHash] = token.ID
+	return nil
+}
+
+func (r *memoryRepo) GetReactivationTokenByHash(_ context.Context, tokenHash string) (*invitation.ReactivationToken, error) {
+	id, ok := r.reactivationByHash[tokenHash]
+	if !ok {
+		return nil, invitation.ErrReactivationTokenInvalid
+	}
+	token := r.reactivations[id]
+	return &token, nil
+}
+
+func (r *memoryRepo) ConsumeReactivationToken(_ context.Context, id string) error {
+	token, ok := r.reactivations[id]
+	if !ok {
+		return invitation.ErrReactivationTokenInvalid
+	}
+	if token.UsedAt != nil || !token.ExpiresAt.After(time.Now()) {
+		return invitation.ErrReactivationTokenInvalid
+	}
+	now := time.Now()
+	token.UsedAt = &now
+	r.reactivations[id] = token
+	return nil
+}
+
+func (r *memoryRepo) ConsumeReactivationTokensByUser(_ context.Context, userID string) error {
+	now := time.Now()
+	for id, token := range r.reactivations {
+		if token.UserID == userID && token.UsedAt == nil {
+			token.UsedAt = &now
+			r.reactivations[id] = token
+		}
+	}
+	return nil
+}
+
+func (r *memoryRepo) ResetMFAByUser(context.Context, string) error            { return nil }
+func (r *memoryRepo) ResetMFABackupCodesByUser(context.Context, string) error { return nil }
+
+func (r *memoryRepo) ActivateReactivatedUser(_ context.Context, userID, _ string, _, _ time.Time) error {
+	u, ok := r.users[userID]
+	if !ok {
+		return invitation.ErrUserNotFound
+	}
+	u.Status = invitation.UserStatusActive
+	u.PasswordSet = true
+	r.users[userID] = u
+	return nil
+}
+
+func (r *memoryRepo) DeletePendingUser(_ context.Context, userID string) error {
+	u, ok := r.users[userID]
+	if !ok {
+		return invitation.ErrUserNotFound
+	}
+	delete(r.usersByMail, u.Email)
+	delete(r.users, userID)
+	delete(r.userRoles, userID)
 	return nil
 }
 

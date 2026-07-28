@@ -10,4 +10,7 @@ var (
 	ErrSuperuserRequired          = errors.New("only a superuser may assign a superuser role")
 	ErrPermissionDenied           = errors.New("permission denied")
 	ErrInvitationPending          = errors.New("pending invitations cannot be managed as active users")
+	ErrInvalidStatusTransition    = errors.New("invalid user status transition")
+	ErrSelfDeactivation           = errors.New("you cannot suspend or deactivate your own account")
+	ErrLastSuperuser              = errors.New("the tenant's last active superuser cannot be suspended or deactivated")
 )

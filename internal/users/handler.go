@@ -28,6 +28,8 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 		response.NotFound(w, err.Error())
 	case errors.Is(err, ErrNotLocked), errors.Is(err, ErrInvitationPending):
 		response.Conflict(w, err.Error())
+	case errors.Is(err, ErrInvalidStatusTransition), errors.Is(err, ErrSelfDeactivation), errors.Is(err, ErrLastSuperuser):
+		response.Conflict(w, err.Error())
 	case errors.Is(err, ErrProviderIdentifierRequired):
 		response.Validation(w, map[string]string{"provider_identifier": err.Error()})
 	case errors.Is(err, ErrSuperuserRequired), errors.Is(err, ErrPermissionDenied):
@@ -36,6 +38,24 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 		h.log.Error("unexpected users domain error", "error", err.Error())
 		response.Internal(w)
 	}
+}
+
+func (h *Handler) DeactivateUser(w http.ResponseWriter, r *http.Request) {
+	ac, ok := middleware.AuthFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	req, ok := bindJSON[LifecycleReasonRequest](w, r)
+	if !ok {
+		return
+	}
+	profile, err := h.service.DeactivateUser(r.Context(), ac.UserID, chi.URLParam(r, "userId"), req.Reason)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.OK(w, profile)
 }
 
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {

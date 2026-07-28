@@ -145,6 +145,7 @@ const (
 	UserStatusActive        UserStatus = "active"
 	UserStatusSuspended     UserStatus = "suspended"
 	UserStatusPendingReview UserStatus = "pending_review"
+	UserStatusDeactivated   UserStatus = "deactivated"
 )
 
 func (e *UserStatus) Scan(src interface{}) error {
@@ -290,6 +291,17 @@ type Permission struct {
 	Description string `json:"description"`
 }
 
+type ReactivationToken struct {
+	ID          string             `json:"id"`
+	TenantID    string             `json:"tenant_id"`
+	UserID      string             `json:"user_id"`
+	RequestedBy string             `json:"requested_by"`
+	TokenHash   string             `json:"token_hash"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	UsedAt      pgtype.Timestamptz `json:"used_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type RefreshToken struct {
 	ID        string             `json:"id"`
 	SessionID string             `json:"session_id"`
@@ -346,6 +358,7 @@ type User struct {
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	TenantID            string             `json:"tenant_id"`
+	DeactivatedAt       pgtype.Timestamptz `json:"deactivated_at"`
 }
 
 type UserRole struct {

@@ -265,6 +265,35 @@ func (r *memoryRepo) HasSuperuserRole(_ context.Context, userID string) (bool, e
 	return r.superusers[userID], nil
 }
 
+func (r *memoryRepo) CountOtherActiveSuperusers(_ context.Context, userID string) (int64, error) {
+	var count int64
+	for id, isSuperuser := range r.superusers {
+		if id != userID && isSuperuser && r.users[id].Status == users.StatusActive {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (r *memoryRepo) LockUserLifecycle(context.Context) error { return nil }
+
+func (r *memoryRepo) DeactivateUser(_ context.Context, userID string, at time.Time) error {
+	u, ok := r.users[userID]
+	if !ok {
+		return users.ErrUserNotFound
+	}
+	u.Status = users.StatusDeactivated
+	u.DeactivatedAt = &at
+	r.users[userID] = u
+	return nil
+}
+
+func (r *memoryRepo) RevokeSessionsByUser(context.Context, string) error             { return nil }
+func (r *memoryRepo) RevokeRefreshTokensByUser(context.Context, string) error        { return nil }
+func (r *memoryRepo) ConsumeLoginChallengesByUser(context.Context, string) error     { return nil }
+func (r *memoryRepo) ConsumePasswordResetTokensByUser(context.Context, string) error { return nil }
+func (r *memoryRepo) ConsumeEnrollmentTokensByUser(context.Context, string) error    { return nil }
+
 func (r *memoryRepo) WithinTx(_ context.Context, fn func(users.Repository) error) error {
 	return fn(r)
 }

@@ -339,6 +339,14 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (*TokenPairRe
 	if !now.Before(token.ExpiresAt) {
 		return nil, ErrRefreshTokenInvalid
 	}
+	session, err := s.repo.GetSessionByID(ctx, token.SessionID)
+	if err != nil || session.UserID != token.UserID || session.IsRevoked() {
+		return nil, ErrRefreshTokenInvalid
+	}
+	user, err := s.repo.GetUserByID(ctx, token.UserID)
+	if err != nil || user.Status != UserStatusActive {
+		return nil, ErrRefreshTokenInvalid
+	}
 
 	var pair *TokenPairResponse
 	err = s.repo.WithinTx(ctx, func(repo Repository) error {

@@ -29,6 +29,22 @@ type Service struct {
 	cfg   Config
 }
 
+func revokeUserAccess(ctx context.Context, repo Repository, userID string) error {
+	operations := []func() error{
+		func() error { return repo.RevokeSessionsByUser(ctx, userID) },
+		func() error { return repo.RevokeRefreshTokensByUser(ctx, userID) },
+		func() error { return repo.ConsumeLoginChallengesByUser(ctx, userID) },
+		func() error { return repo.ConsumePasswordResetTokensByUser(ctx, userID) },
+		func() error { return repo.ConsumeEnrollmentTokensByUser(ctx, userID) },
+	}
+	for _, operation := range operations {
+		if err := operation(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func NewService(repo Repository, audit AuditRecorder, log *logger.Logger, cfg Config) *Service {
 	return &Service{repo: repo, audit: audit, log: log, cfg: cfg}
 }
@@ -56,6 +72,20 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, targetUserID stri
 	}
 	if user.Status == StatusInvited && req.Status != nil {
 		return nil, ErrInvitationPending
+	}
+	if user.Status == StatusDeactivated && req.Status != nil {
+		return nil, ErrInvalidStatusTransition
+	}
+	suspending := req.Status != nil && *req.Status == string(StatusSuspended) && user.Status != StatusSuspended
+	if suspending && actorUserID == targetUserID {
+		return nil, ErrSelfDeactivation
+	}
+	targetIsSuperuser := false
+	if suspending {
+		targetIsSuperuser, err = s.repo.HasSuperuserRole(ctx, targetUserID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if len(req.RoleIDs) > 0 {
@@ -93,6 +123,18 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, targetUserID stri
 	}
 
 	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if suspending && targetIsSuperuser && user.Status == StatusActive {
+			if err := repo.LockUserLifecycle(ctx); err != nil {
+				return err
+			}
+			count, err := repo.CountOtherActiveSuperusers(ctx, targetUserID)
+			if err != nil {
+				return err
+			}
+			if count == 0 {
+				return ErrLastSuperuser
+			}
+		}
 		if len(req.RoleIDs) > 0 {
 			if err := repo.ReplaceUserRoles(ctx, targetUserID, req.RoleIDs); err != nil {
 				return err
@@ -106,6 +148,9 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, targetUserID stri
 		if req.Status != nil {
 			if err := repo.UpdateUserStatus(ctx, targetUserID, *req.Status); err != nil {
 				return err
+			}
+			if suspending {
+				return revokeUserAccess(ctx, repo, targetUserID)
 			}
 		}
 		return nil
@@ -122,6 +167,61 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, targetUserID stri
 	return s.getProfile(ctx, targetUserID)
 }
 
+// DeactivateUser permanently removes an activated staff member's access
+// while retaining their identity and role history for record attribution.
+func (s *Service) DeactivateUser(ctx context.Context, actorUserID, targetUserID, reason string) (*UserProfileResponse, error) {
+	if actorUserID == targetUserID {
+		_ = s.audit.Record(ctx, audit.Entry{UserID: &actorUserID, Action: "user_deactivated", Result: audit.ResultFailure, TargetResource: targetUserID, Metadata: map[string]any{"reason": reason, "error": ErrSelfDeactivation.Error()}})
+		return nil, ErrSelfDeactivation
+	}
+	user, err := s.repo.GetUserByID(ctx, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	if user.Status == StatusInvited {
+		_ = s.audit.Record(ctx, audit.Entry{UserID: &actorUserID, Action: "user_deactivated", Result: audit.ResultFailure, TargetResource: targetUserID, Metadata: map[string]any{"reason": reason, "error": ErrInvitationPending.Error()}})
+		return nil, ErrInvitationPending
+	}
+	if user.Status == StatusDeactivated {
+		_ = s.audit.Record(ctx, audit.Entry{UserID: &actorUserID, Action: "user_deactivated", Result: audit.ResultFailure, TargetResource: targetUserID, Metadata: map[string]any{"reason": reason, "error": ErrInvalidStatusTransition.Error()}})
+		return nil, ErrInvalidStatusTransition
+	}
+
+	targetIsSuperuser, err := s.repo.HasSuperuserRole(ctx, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if targetIsSuperuser && user.Status == StatusActive {
+			if err := repo.LockUserLifecycle(ctx); err != nil {
+				return err
+			}
+			count, err := repo.CountOtherActiveSuperusers(ctx, targetUserID)
+			if err != nil {
+				return err
+			}
+			if count == 0 {
+				return ErrLastSuperuser
+			}
+		}
+		if err := repo.DeactivateUser(ctx, targetUserID, now); err != nil {
+			return err
+		}
+		return revokeUserAccess(ctx, repo, targetUserID)
+	})
+	if err != nil {
+		_ = s.audit.Record(ctx, audit.Entry{UserID: &actorUserID, Action: "user_deactivated", Result: audit.ResultFailure, TargetResource: targetUserID, Metadata: map[string]any{"reason": reason, "error": err.Error()}})
+		return nil, err
+	}
+
+	_ = s.audit.Record(ctx, audit.Entry{
+		UserID: &actorUserID, Action: "user_deactivated", Result: audit.ResultSuccess,
+		TargetResource: targetUserID, Metadata: map[string]any{"reason": reason},
+	})
+	return s.getProfile(ctx, targetUserID)
+}
+
 // RecordAccessReview records a quarterly access-review decision. A
 // revoke_access decision immediately suspends the account; the other
 // decisions only update the review timestamps.
@@ -133,16 +233,44 @@ func (s *Service) RecordAccessReview(ctx context.Context, actorUserID, targetUse
 	if user.Status == StatusInvited {
 		return nil, ErrInvitationPending
 	}
+	revoking := req.Decision == "revoke_access" && user.Status != StatusSuspended
+	if revoking && actorUserID == targetUserID {
+		return nil, ErrSelfDeactivation
+	}
+	targetIsSuperuser := false
+	if revoking {
+		targetIsSuperuser, err = s.repo.HasSuperuserRole(ctx, targetUserID)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	now := time.Now()
 	nextDue := now.Add(s.cfg.AccessReviewCycle)
 
 	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if revoking && targetIsSuperuser && user.Status == StatusActive {
+			if err := repo.LockUserLifecycle(ctx); err != nil {
+				return err
+			}
+			count, err := repo.CountOtherActiveSuperusers(ctx, targetUserID)
+			if err != nil {
+				return err
+			}
+			if count == 0 {
+				return ErrLastSuperuser
+			}
+		}
 		if err := repo.RecordAccessReview(ctx, targetUserID, now, nextDue); err != nil {
 			return err
 		}
 		if req.Decision == "revoke_access" {
-			return repo.UpdateUserStatus(ctx, targetUserID, string(StatusSuspended))
+			if err := repo.UpdateUserStatus(ctx, targetUserID, string(StatusSuspended)); err != nil {
+				return err
+			}
+			if revoking {
+				return revokeUserAccess(ctx, repo, targetUserID)
+			}
 		}
 		return nil
 	})

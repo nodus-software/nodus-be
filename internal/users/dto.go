@@ -24,6 +24,7 @@ type UserProfileResponse struct {
 	MFAEnrolled         bool       `json:"mfa_enrolled"`
 	LastAccessReviewAt  *time.Time `json:"last_access_review_at,omitempty"`
 	NextAccessReviewDue *time.Time `json:"next_access_review_due,omitempty"`
+	DeactivatedAt       *time.Time `json:"deactivated_at,omitempty"`
 	InvitationExpiresAt *time.Time `json:"invitation_expires_at,omitempty"`
 	InvitationStatus    *string    `json:"invitation_status,omitempty"`
 }
@@ -34,6 +35,7 @@ func toUserProfileResponse(u User) UserProfileResponse {
 		ProviderIdentifier: u.ProviderIdentifier, Roles: u.RoleNames, Permissions: u.Permissions,
 		Status: string(u.Status), MFAEnrolled: u.MFAEnrolled,
 		LastAccessReviewAt: u.LastAccessReviewAt, NextAccessReviewDue: u.NextAccessReviewDue,
+		DeactivatedAt:       u.DeactivatedAt,
 		InvitationExpiresAt: u.InvitationExpiresAt,
 	}
 	if u.Status == StatusInvited && u.InvitationExpiresAt != nil {
@@ -66,4 +68,8 @@ type AccessReviewRequest struct {
 
 type UnlockRequest struct {
 	Reason string `json:"reason"`
+}
+
+type LifecycleReasonRequest struct {
+	Reason string `json:"reason" validate:"required,max=500"`
 }

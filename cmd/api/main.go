@@ -113,6 +113,7 @@ func main() {
 		BcryptCost:         cfg.BcryptCost,
 		OrganizationName:   cfg.OrganizationName,
 		PasswordPolicy:     authCfg.PasswordPolicy,
+		AccessReviewCycle:  cfg.AccessReviewCycle,
 	})
 	invitationHandler := invitation.NewHandler(invitationService, authService, cfg.JWTSecret, log)
 

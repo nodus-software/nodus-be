@@ -36,3 +36,18 @@ type AcceptInviteRequest struct {
 type EnrollmentTokenResponse struct {
 	EnrollmentToken string `json:"enrollment_token"`
 }
+
+type LifecycleReasonRequest struct {
+	Reason string `json:"reason" validate:"required,max=500"`
+}
+
+type ValidateReactivationResponse struct {
+	FullName     string `json:"full_name"`
+	Email        string `json:"email"`
+	Organization string `json:"organization"`
+}
+
+type AcceptReactivationRequest struct {
+	Token    string `json:"token" validate:"required"`
+	Password string `json:"password" validate:"required"`
+}

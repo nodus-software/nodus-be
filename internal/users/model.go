@@ -9,6 +9,7 @@ const (
 	StatusActive        Status = "active"
 	StatusSuspended     Status = "suspended"
 	StatusPendingReview Status = "pending_review"
+	StatusDeactivated   Status = "deactivated"
 )
 
 // Role is the subset of a role's shape this domain needs to validate a
@@ -32,6 +33,7 @@ type User struct {
 	LockedUntil         *time.Time
 	LastAccessReviewAt  *time.Time
 	NextAccessReviewDue *time.Time
+	DeactivatedAt       *time.Time
 	InvitationExpiresAt *time.Time
 	InvitationUsedAt    *time.Time
 	MFAEnrolled         bool

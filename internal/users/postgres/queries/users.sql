@@ -107,3 +107,46 @@ SELECT EXISTS (
       AND r.tenant_id = ur.tenant_id
       AND r.is_superuser_role = true
 );
+
+-- name: CountOtherActiveSuperusers :one
+SELECT count(*) FROM users u
+WHERE u.id <> $1 AND u.status = 'active'
+  AND u.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND EXISTS (
+    SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+    WHERE ur.user_id = u.id AND ur.tenant_id = u.tenant_id
+      AND r.tenant_id = u.tenant_id AND r.is_superuser_role = true
+  );
+
+-- name: LockUserLifecycle :exec
+SELECT pg_advisory_xact_lock(hashtextextended(current_setting('app.tenant_id', true), 0));
+
+-- name: DeactivateUser :exec
+UPDATE users SET status = 'deactivated', deactivated_at = $2
+WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: RevokeSessionsByUser :exec
+UPDATE sessions SET revoked_at = now()
+WHERE user_id = $1 AND revoked_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: RevokeRefreshTokensByUser :exec
+UPDATE refresh_tokens SET revoked_at = now()
+WHERE user_id = $1 AND revoked_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ConsumeLoginChallengesByUser :exec
+UPDATE login_challenges SET consumed_at = now()
+WHERE user_id = $1 AND consumed_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ConsumePasswordResetTokensByUser :exec
+UPDATE password_reset_tokens SET used_at = now()
+WHERE user_id = $1 AND used_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ConsumeEnrollmentTokensByUser :exec
+UPDATE enrollment_tokens SET consumed_at = now()
+WHERE user_id = $1 AND consumed_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;

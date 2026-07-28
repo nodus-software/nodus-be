@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"nodus-health/internal/invitation"
+	"nodus-health/pkg/utility"
 )
 
 func TestInvite_GoldenPath_CreatesPendingUserAndSendsEmail(t *testing.T) {
@@ -33,6 +34,75 @@ func TestInvite_GoldenPath_CreatesPendingUserAndSendsEmail(t *testing.T) {
 	}
 	if !strings.Contains(mail.HTML, "Accept invitation") || !strings.Contains(mail.HTML, "https://app.test/invite?token=") || !strings.Contains(mail.HTML, "&amp;tenant=nodus-test") {
 		t.Fatal("expected a rendered HTML invitation with a password-setup link")
+	}
+}
+
+func TestReactivation_GoldenPathRequiresFreshSetupAndIsSingleUse(t *testing.T) {
+	env := Setup(t)
+	userID, err := utility.GenerateUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.Repo.users[userID] = invitation.PendingUser{
+		ID: userID, FullName: "Returning User", Email: "returning@example.com",
+		Status: invitation.UserStatusDeactivated, PasswordSet: true,
+	}
+	env.Repo.usersByMail["returning@example.com"] = userID
+	_, actorToken := env.NewActor(t, "users:deactivate")
+
+	request := env.JSON(t, http.MethodPost, "/users/"+userID+"/reactivate", actorToken, invitation.LifecycleReasonRequest{
+		Reason: "rehired",
+	})
+	if request.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", request.Code, request.Body.String())
+	}
+	rawToken := env.Mailer.LastToken()
+	if rawToken == "" {
+		t.Fatal("expected a reactivation token in email")
+	}
+	if env.Repo.users[userID].Status != invitation.UserStatusDeactivated {
+		t.Fatal("expected account to remain deactivated until link acceptance")
+	}
+
+	preview := env.JSON(t, http.MethodGet, "/users/reactivations/"+rawToken, "", nil)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("expected 200 previewing reactivation, got %d: %s", preview.Code, preview.Body.String())
+	}
+	accept := env.JSON(t, http.MethodPost, "/users/reactivations/"+rawToken+"/accept", "", invitation.AcceptReactivationRequest{
+		Token: rawToken, Password: "Str0ng!Passw0rd",
+	})
+	if accept.Code != http.StatusOK {
+		t.Fatalf("expected 200 accepting reactivation, got %d: %s", accept.Code, accept.Body.String())
+	}
+	if env.Repo.users[userID].Status != invitation.UserStatusActive || len(env.Repo.enrollments) != 1 {
+		t.Fatal("expected active account and a fresh MFA enrollment token")
+	}
+	replay := env.JSON(t, http.MethodPost, "/users/reactivations/"+rawToken+"/accept", "", invitation.AcceptReactivationRequest{
+		Token: rawToken, Password: "Str0ng!Passw0rd",
+	})
+	if replay.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 replaying reactivation, got %d: %s", replay.Code, replay.Body.String())
+	}
+}
+
+func TestCancelInvitation_RemovesOnlyPendingAccount(t *testing.T) {
+	env := Setup(t)
+	env.CreateRole("role-receptionist", "Receptionist", false)
+	_, actorToken := env.NewActor(t, "users:invite")
+	inviteRec := env.JSON(t, http.MethodPost, "/users/invitations", actorToken, invitation.InviteUserRequest{
+		FullName: "Cancelled User", Email: "cancelled@example.com", RoleIDs: []string{"role-receptionist"},
+	})
+	var profile invitation.UserProfileResponse
+	Decode(t, inviteRec, &profile)
+
+	cancel := env.JSON(t, http.MethodPost, "/users/invitations/"+profile.ID+"/cancel", actorToken, invitation.LifecycleReasonRequest{
+		Reason: "invited in error",
+	})
+	if cancel.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", cancel.Code, cancel.Body.String())
+	}
+	if _, ok := env.Repo.users[profile.ID]; ok {
+		t.Fatal("expected never-activated pending account to be removed")
 	}
 }
 

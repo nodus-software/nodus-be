@@ -31,6 +31,7 @@ func (r *Repository) ListUsers(ctx context.Context, filter users.ListUsersFilter
 			LockedUntil:         fromNullTimestamptz(row.LockedUntil),
 			LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
 			NextAccessReviewDue: fromNullTimestamptz(row.NextAccessReviewDue),
+			DeactivatedAt:       fromNullTimestamptz(row.DeactivatedAt),
 			InvitationExpiresAt: fromNullTimestamptz(row.InvitationExpiresAt),
 			InvitationUsedAt:    fromNullTimestamptz(row.InvitationUsedAt),
 			MFAEnrolled:         row.MfaEnrolled,
@@ -55,6 +56,7 @@ func (r *Repository) GetUserByID(ctx context.Context, id string) (*users.User, e
 		LockedUntil:         fromNullTimestamptz(row.LockedUntil),
 		LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
 		NextAccessReviewDue: fromNullTimestamptz(row.NextAccessReviewDue),
+		DeactivatedAt:       fromNullTimestamptz(row.DeactivatedAt),
 		InvitationExpiresAt: fromNullTimestamptz(row.InvitationExpiresAt),
 		InvitationUsedAt:    fromNullTimestamptz(row.InvitationUsedAt),
 		MFAEnrolled:         row.MfaEnrolled,
@@ -110,4 +112,36 @@ func (r *Repository) GetRolesByIDs(ctx context.Context, ids []string) ([]users.R
 
 func (r *Repository) HasSuperuserRole(ctx context.Context, userID string) (bool, error) {
 	return r.q(ctx).HasSuperuserRole(ctx, userID)
+}
+
+func (r *Repository) CountOtherActiveSuperusers(ctx context.Context, userID string) (int64, error) {
+	return r.q(ctx).CountOtherActiveSuperusers(ctx, userID)
+}
+
+func (r *Repository) LockUserLifecycle(ctx context.Context) error {
+	return r.q(ctx).LockUserLifecycle(ctx)
+}
+
+func (r *Repository) DeactivateUser(ctx context.Context, userID string, deactivatedAt time.Time) error {
+	return r.q(ctx).DeactivateUser(ctx, sqlcgen.DeactivateUserParams{ID: userID, DeactivatedAt: toTimestamptz(deactivatedAt)})
+}
+
+func (r *Repository) RevokeSessionsByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).RevokeSessionsByUser(ctx, userID)
+}
+
+func (r *Repository) RevokeRefreshTokensByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).RevokeRefreshTokensByUser(ctx, userID)
+}
+
+func (r *Repository) ConsumeLoginChallengesByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).ConsumeLoginChallengesByUser(ctx, userID)
+}
+
+func (r *Repository) ConsumePasswordResetTokensByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).ConsumePasswordResetTokensByUser(ctx, userID)
+}
+
+func (r *Repository) ConsumeEnrollmentTokensByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).ConsumeEnrollmentTokensByUser(ctx, userID)
 }

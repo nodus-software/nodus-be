@@ -1,0 +1,5 @@
+{{define "content"}}<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#1a2023;">Hi {{.RecipientName}},</p>
+<p style="margin:0;font-size:15px;line-height:1.65;color:#1a2023;">An administrator has approved reactivation of your <strong>{{.OrganizationName}}</strong> account. Set up a new password and multi-factor authentication to regain access.</p>
+{{template "button" .}}
+<div style="margin:24px 0 0;padding:14px 16px;background:#e3efff;border-radius:6px;color:#515a5d;font-size:13px;line-height:1.6;">This link expires on <strong>{{formatTime .ExpiresAt}}</strong> and can only be used once.</div>
+<p style="margin:22px 0 0;color:#798285;font-size:13px;line-height:1.6;">If you were not expecting this, ignore this email and contact {{.OrganizationName}}.</p>{{end}}
