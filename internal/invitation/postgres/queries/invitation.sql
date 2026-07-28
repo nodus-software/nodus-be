@@ -61,6 +61,12 @@ UPDATE users SET status = 'active', password_hash = $2, password_changed_at = no
 WHERE id = $1
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
 
+-- name: RestoreInvitedUser :exec
+UPDATE users SET status = 'invited'
+WHERE id = $1
+  AND password_hash IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
 -- name: CreateEnrollmentToken :exec
 INSERT INTO enrollment_tokens (id, user_id, token_hash, expires_at)
 VALUES ($1, $2, $3, $4);

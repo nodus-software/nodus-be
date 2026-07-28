@@ -2,6 +2,7 @@ package test_invitation
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"nodus-health/internal/invitation"
@@ -26,6 +27,13 @@ func TestInvite_GoldenPath_CreatesPendingUserAndSendsEmail(t *testing.T) {
 	if env.Mailer.LastToken() == "" {
 		t.Fatal("expected an invitation email to be sent with a token")
 	}
+	mail := env.Mailer.Sent[len(env.Mailer.Sent)-1]
+	if !strings.Contains(mail.Text, "https://app.test/invite?token=") || !strings.Contains(mail.Text, "&tenant=nodus-test") {
+		t.Fatalf("expected password-setup URL in text email, got %q", mail.Text)
+	}
+	if !strings.Contains(mail.HTML, "Accept invitation") || !strings.Contains(mail.HTML, "https://app.test/invite?token=") || !strings.Contains(mail.HTML, "&amp;tenant=nodus-test") {
+		t.Fatal("expected a rendered HTML invitation with a password-setup link")
+	}
 }
 
 func TestInvite_ClinicalRoleWithoutProviderIdentifier_Returns422(t *testing.T) {
@@ -41,7 +49,7 @@ func TestInvite_ClinicalRoleWithoutProviderIdentifier_Returns422(t *testing.T) {
 	}
 }
 
-func TestInvite_DuplicateEmail_Returns409(t *testing.T) {
+func TestInvite_DuplicatePendingEmail_ResendsInsteadOfCreatingAnotherUser(t *testing.T) {
 	env := Setup(t)
 	env.CreateRole("role-receptionist", "Receptionist", false)
 	_, actorToken := env.NewActor(t, "users:invite")
@@ -51,10 +59,18 @@ func TestInvite_DuplicateEmail_Returns409(t *testing.T) {
 	if first.Code != http.StatusCreated {
 		t.Fatalf("expected first invite to succeed, got %d: %s", first.Code, first.Body.String())
 	}
+	firstToken := env.Mailer.LastToken()
+	userCount := len(env.Repo.users)
 
 	second := env.JSON(t, http.MethodPost, "/users/invitations", actorToken, req)
-	if second.Code != http.StatusConflict {
-		t.Fatalf("expected 409 on duplicate email, got %d: %s", second.Code, second.Body.String())
+	if second.Code != http.StatusCreated {
+		t.Fatalf("expected a replacement invitation, got %d: %s", second.Code, second.Body.String())
+	}
+	if len(env.Repo.users) != userCount {
+		t.Fatal("expected the existing pending user to be reused")
+	}
+	if env.Mailer.LastToken() == firstToken {
+		t.Fatal("expected a new invitation token")
 	}
 }
 

@@ -54,6 +54,9 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, targetUserID stri
 	if err != nil {
 		return nil, err
 	}
+	if user.Status == StatusInvited && req.Status != nil {
+		return nil, ErrInvitationPending
+	}
 
 	if len(req.RoleIDs) > 0 {
 		newRoles, err := s.repo.GetRolesByIDs(ctx, req.RoleIDs)
@@ -123,14 +126,18 @@ func (s *Service) UpdateUser(ctx context.Context, actorUserID, targetUserID stri
 // revoke_access decision immediately suspends the account; the other
 // decisions only update the review timestamps.
 func (s *Service) RecordAccessReview(ctx context.Context, actorUserID, targetUserID string, req AccessReviewRequest) (*UserProfileResponse, error) {
-	if _, err := s.repo.GetUserByID(ctx, targetUserID); err != nil {
+	user, err := s.repo.GetUserByID(ctx, targetUserID)
+	if err != nil {
 		return nil, err
+	}
+	if user.Status == StatusInvited {
+		return nil, ErrInvitationPending
 	}
 
 	now := time.Now()
 	nextDue := now.Add(s.cfg.AccessReviewCycle)
 
-	err := s.repo.WithinTx(ctx, func(repo Repository) error {
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
 		if err := repo.RecordAccessReview(ctx, targetUserID, now, nextDue); err != nil {
 			return err
 		}

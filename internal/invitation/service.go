@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"nodus-health/internal/audit"
 	"nodus-health/internal/auth"
+	"nodus-health/internal/email"
 	"nodus-health/internal/tenant"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
@@ -38,12 +40,37 @@ type Service struct {
 	repo   Repository
 	audit  AuditRecorder
 	mailer Mailer
+	email  *email.Renderer
 	log    *logger.Logger
 	cfg    Config
 }
 
-func NewService(repo Repository, audit AuditRecorder, mailer Mailer, log *logger.Logger, cfg Config) *Service {
-	return &Service{repo: repo, audit: audit, mailer: mailer, log: log, cfg: cfg}
+func NewService(repo Repository, audit AuditRecorder, mailer Mailer, renderer *email.Renderer, log *logger.Logger, cfg Config) *Service {
+	return &Service{repo: repo, audit: audit, mailer: mailer, email: renderer, log: log, cfg: cfg}
+}
+
+func (s *Service) sendInvitationEmail(ctx context.Context, recipientName, recipientEmail, inviteLink string, expiresAt time.Time, resend bool) {
+	rendered, err := s.email.RenderStaffInvitation(email.StaffInvitationData{
+		CommonData: email.CommonData{
+			RecipientName: recipientName, OrganizationName: s.cfg.OrganizationName,
+		},
+		InviterName: "An administrator", InviteURL: inviteLink, ExpiresAt: expiresAt, IsResend: resend,
+	})
+	if err != nil {
+		s.log.Error("failed to render invitation email", "error", err.Error())
+		return
+	}
+	if err := s.mailer.SendHTML(ctx, recipientEmail, rendered.Subject, rendered.Text, rendered.HTML); err != nil {
+		s.log.Error("failed to send invitation email", "error", err.Error())
+	}
+}
+
+func (s *Service) invitationLink(ctx context.Context, rawToken string) (string, error) {
+	identity, ok := tenant.FromContext(ctx)
+	if !ok {
+		return "", tenant.ErrMissing
+	}
+	return fmt.Sprintf("%s/invite?token=%s&tenant=%s", strings.TrimRight(s.cfg.BaseURL, "/"), url.QueryEscape(rawToken), url.QueryEscape(identity.Slug)), nil
 }
 
 // Invite creates a pending user (status=invited), assigns their roles, and
@@ -55,8 +82,22 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 		return nil, err
 	}
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	_, err = s.repo.GetUserByEmail(ctx, tenantID, req.Email)
+	existing, err := s.repo.GetUserByEmail(ctx, tenantID, req.Email)
 	if err == nil {
+		if (existing.Status == UserStatusInvited || existing.Status == UserStatusSuspended) && !existing.PasswordSet {
+			if err := s.Resend(ctx, actorUserID, existing.ID); err != nil {
+				return nil, err
+			}
+			roleNames, err := s.repo.GetUserRoleNames(ctx, existing.ID)
+			if err != nil {
+				return nil, err
+			}
+			return &UserProfileResponse{
+				ID: existing.ID, TenantID: tenantID, FullName: existing.FullName, Username: existing.Email,
+				Email: existing.Email, ProviderIdentifier: existing.ProviderIdentifier, Roles: roleNames,
+				Permissions: []string{}, Status: string(UserStatusInvited), MFAEnrolled: false,
+			}, nil
+		}
 		return nil, ErrEmailAlreadyExists
 	}
 	if !errors.Is(err, ErrUserNotFound) {
@@ -120,10 +161,11 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 		return nil, err
 	}
 
-	inviteLink := fmt.Sprintf("%s/accept-invite?token=%s", s.cfg.BaseURL, rawToken)
-	if err := s.mailer.Send(ctx, req.Email, "You've been invited to Nodus Health", inviteLink); err != nil {
-		s.log.Error("failed to send invitation email", "error", err.Error())
+	inviteLink, err := s.invitationLink(ctx, rawToken)
+	if err != nil {
+		return nil, err
 	}
+	s.sendInvitationEmail(ctx, req.FullName, req.Email, inviteLink, now.Add(s.cfg.InviteTokenTTL), false)
 
 	_ = s.audit.Record(ctx, audit.Entry{
 		UserID: &actorUserID, Action: "user_invited", Result: audit.ResultSuccess,
@@ -233,7 +275,7 @@ func (s *Service) Resend(ctx context.Context, actorUserID, targetUserID string) 
 	if err != nil {
 		return err
 	}
-	if user.Status != UserStatusInvited {
+	if user.Status != UserStatusInvited && !(user.Status == UserStatusSuspended && !user.PasswordSet) {
 		return ErrNotPending
 	}
 
@@ -253,6 +295,11 @@ func (s *Service) Resend(ctx context.Context, actorUserID, targetUserID string) 
 	now := time.Now()
 
 	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if user.Status != UserStatusInvited {
+			if err := repo.RestoreInvitedUser(ctx, targetUserID); err != nil {
+				return err
+			}
+		}
 		if !latest.IsUsed() {
 			if err := repo.ConsumeInvitation(ctx, latest.ID); err != nil {
 				return err
@@ -267,10 +314,11 @@ func (s *Service) Resend(ctx context.Context, actorUserID, targetUserID string) 
 		return err
 	}
 
-	inviteLink := fmt.Sprintf("%s/accept-invite?token=%s", s.cfg.BaseURL, rawToken)
-	if err := s.mailer.Send(ctx, user.Email, "Your Nodus Health invitation", inviteLink); err != nil {
-		s.log.Error("failed to send invitation email", "error", err.Error())
+	inviteLink, err := s.invitationLink(ctx, rawToken)
+	if err != nil {
+		return err
 	}
+	s.sendInvitationEmail(ctx, user.FullName, user.Email, inviteLink, now.Add(s.cfg.InviteTokenTTL), true)
 
 	_ = s.audit.Record(ctx, audit.Entry{
 		UserID: &actorUserID, Action: "invitation_resent", Result: audit.ResultSuccess, TargetResource: targetUserID,

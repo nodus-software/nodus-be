@@ -5,8 +5,9 @@ import "time"
 type UserStatus string
 
 const (
-	UserStatusInvited UserStatus = "invited"
-	UserStatusActive  UserStatus = "active"
+	UserStatusInvited   UserStatus = "invited"
+	UserStatusActive    UserStatus = "active"
+	UserStatusSuspended UserStatus = "suspended"
 )
 
 // Invitation is the single-use, hashed-at-rest token issued when an admin
@@ -47,10 +48,12 @@ type Role struct {
 // preview/accept an invitation or resend one, without owning the user's
 // credentials or full profile (that belongs to the Users/Auth domains).
 type PendingUser struct {
-	ID       string
-	FullName string
-	Email    string
-	Status   UserStatus
+	ID                 string
+	FullName           string
+	Email              string
+	ProviderIdentifier *string
+	Status             UserStatus
+	PasswordSet        bool
 }
 
 // CreateInvitedUserParams creates the pending user record an invitation

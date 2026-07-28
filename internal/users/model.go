@@ -32,6 +32,8 @@ type User struct {
 	LockedUntil         *time.Time
 	LastAccessReviewAt  *time.Time
 	NextAccessReviewDue *time.Time
+	InvitationExpiresAt *time.Time
+	InvitationUsedAt    *time.Time
 	MFAEnrolled         bool
 	RoleNames           []string
 	Permissions         []string

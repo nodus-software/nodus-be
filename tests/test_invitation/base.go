@@ -14,6 +14,7 @@ import (
 
 	"nodus-health/internal/audit"
 	"nodus-health/internal/auth"
+	"nodus-health/internal/email"
 	"nodus-health/internal/invitation"
 	"nodus-health/internal/tenant"
 	"nodus-health/pkg/logger"
@@ -25,16 +26,16 @@ type discardAudit struct{}
 
 func (discardAudit) Record(context.Context, audit.Entry) error { return nil }
 
-type sentMail struct{ To, Subject, Body string }
+type sentMail struct{ To, Subject, Text, HTML string }
 type memoryMailer struct {
 	mu   sync.Mutex
 	Sent []sentMail
 }
 
-func (m *memoryMailer) Send(_ context.Context, to, subject, body string) error {
+func (m *memoryMailer) SendHTML(_ context.Context, to, subject, textBody, htmlBody string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Sent = append(m.Sent, sentMail{to, subject, body})
+	m.Sent = append(m.Sent, sentMail{To: to, Subject: subject, Text: textBody, HTML: htmlBody})
 	return nil
 }
 
@@ -45,11 +46,15 @@ func (m *memoryMailer) LastToken() string {
 		return ""
 	}
 	const marker = "?token="
-	parts := strings.SplitN(m.Sent[len(m.Sent)-1].Body, marker, 2)
+	parts := strings.SplitN(m.Sent[len(m.Sent)-1].Text, marker, 2)
 	if len(parts) != 2 {
 		return ""
 	}
-	return parts[1]
+	fields := strings.Fields(parts[1])
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.SplitN(fields[0], "&", 2)[0]
 }
 
 type stubAuthorizer struct {
@@ -83,7 +88,8 @@ func Setup(t *testing.T) *Env {
 	t.Helper()
 	repo := newMemoryRepo()
 	mailer := &memoryMailer{}
-	service := invitation.NewService(repo, discardAudit{}, mailer, logger.NewLogger(), invitation.Config{
+	renderer := email.NewRenderer(email.CommonData{AppName: "Nodus Health", AppURL: "https://app.test"})
+	service := invitation.NewService(repo, discardAudit{}, mailer, renderer, logger.NewLogger(), invitation.Config{
 		BaseURL: "https://app.test", InviteTokenTTL: 24 * time.Hour, EnrollmentTokenTTL: 30 * time.Minute,
 		BcryptCost: 4, OrganizationName: "Nodus Test",
 		PasswordPolicy: auth.PasswordPolicy{MinLength: 12, RequireUppercase: true, RequireNumber: true, RequireSymbol: true},
@@ -286,7 +292,20 @@ func (r *memoryRepo) ActivateUserWithPassword(_ context.Context, userID, _ strin
 		return invitation.ErrUserNotFound
 	}
 	u.Status = invitation.UserStatusActive
+	u.PasswordSet = true
 	r.users[userID] = u
+	return nil
+}
+
+func (r *memoryRepo) RestoreInvitedUser(_ context.Context, userID string) error {
+	u, ok := r.users[userID]
+	if !ok {
+		return invitation.ErrUserNotFound
+	}
+	if !u.PasswordSet {
+		u.Status = invitation.UserStatusInvited
+		r.users[userID] = u
+	}
 	return nil
 }
 

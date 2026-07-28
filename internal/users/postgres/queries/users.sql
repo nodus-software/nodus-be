@@ -4,7 +4,13 @@ SELECT u.*,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
         SELECT 1 FROM mfa_factors mf WHERE mf.user_id = u.id AND mf.confirmed_at IS NOT NULL
-    ) AS mfa_enrolled
+    ) AS mfa_enrolled,
+    (SELECT i.expires_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_expires_at,
+    (SELECT i.used_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_used_at
 FROM users u
 LEFT JOIN user_roles ur ON ur.user_id = u.id
 LEFT JOIN roles r ON r.id = ur.role_id
@@ -31,7 +37,13 @@ SELECT u.*,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
         SELECT 1 FROM mfa_factors mf WHERE mf.user_id = u.id AND mf.confirmed_at IS NOT NULL
-    ) AS mfa_enrolled
+    ) AS mfa_enrolled,
+    (SELECT i.expires_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_expires_at,
+    (SELECT i.used_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_used_at
 FROM users u
 LEFT JOIN user_roles ur ON ur.user_id = u.id
 LEFT JOIN roles r ON r.id = ur.role_id

@@ -106,7 +106,7 @@ func main() {
 	usersHandler := users.NewHandler(usersService, authService, cfg.JWTSecret, log)
 
 	invitationRepo := invitationpg.New(pool)
-	invitationService := invitation.NewService(invitationRepo, auditService, mailer, log, invitation.Config{
+	invitationService := invitation.NewService(invitationRepo, auditService, mailer, emailRenderer, log, invitation.Config{
 		BaseURL:            cfg.BaseUrl,
 		InviteTokenTTL:     cfg.InviteTokenTTL,
 		EnrollmentTokenTTL: cfg.EnrollmentTokenTTL,

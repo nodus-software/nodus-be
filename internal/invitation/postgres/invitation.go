@@ -12,7 +12,8 @@ import (
 
 func pendingUserFromRow(u sqlcgen.User) *invitation.PendingUser {
 	return &invitation.PendingUser{
-		ID: u.ID, FullName: u.FullName, Email: u.Email, Status: invitation.UserStatus(u.Status),
+		ID: u.ID, FullName: u.FullName, Email: u.Email, ProviderIdentifier: u.ProviderIdentifier,
+		Status: invitation.UserStatus(u.Status), PasswordSet: u.PasswordHash != nil,
 	}
 }
 
@@ -120,6 +121,10 @@ func (r *Repository) ActivateUserWithPassword(ctx context.Context, userID, passw
 	return r.q(ctx).ActivateUserWithPassword(ctx, sqlcgen.ActivateUserWithPasswordParams{
 		ID: userID, PasswordHash: &passwordHash,
 	})
+}
+
+func (r *Repository) RestoreInvitedUser(ctx context.Context, userID string) error {
+	return r.q(ctx).RestoreInvitedUser(ctx, userID)
 }
 
 func (r *Repository) CreateEnrollmentToken(ctx context.Context, token invitation.EnrollmentToken) error {

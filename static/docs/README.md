@@ -11,3 +11,12 @@ The implementation wraps every JSON response:
 
 The canonical source is the repository-root `auth-api-contract.yaml`; keep this
 published copy synchronized whenever the contract changes.
+
+## Health check
+
+`GET /health` is a public liveness probe. It does not require authentication,
+tenant headers, or database access. A healthy process returns HTTP 200:
+
+```json
+{"success":true,"data":{"status":"ok"}}
+```

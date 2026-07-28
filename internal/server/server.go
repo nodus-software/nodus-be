@@ -12,6 +12,7 @@ import (
 
 	"nodus-health/internal/middleware"
 	"nodus-health/pkg/logger"
+	"nodus-health/pkg/response"
 )
 
 // RouteRegistrar is implemented by each domain's handler to attach its own
@@ -51,16 +52,25 @@ func New(cfg Config, log *logger.Logger, registrars ...RouteRegistrar) *Server {
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.CORS(cfg.AllowedOrigins))
 	r.Use(middleware.Timeout(cfg.RequestTimeout))
-	if cfg.TenantResolver != nil {
-		r.Use(middleware.ResolveTenant(cfg.TenantResolver))
-	}
-	if cfg.TenantPool != nil {
-		r.Use(middleware.TenantTransaction(cfg.TenantPool))
-	}
 
-	for _, reg := range registrars {
-		reg.RegisterRoutes(r)
-	}
+	// Health is intentionally outside tenant and database middleware so that
+	// infrastructure can probe this process without tenant-specific headers.
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		response.OK(w, map[string]string{"status": "ok"})
+	})
+
+	r.Group(func(r chi.Router) {
+		if cfg.TenantResolver != nil {
+			r.Use(middleware.ResolveTenant(cfg.TenantResolver))
+		}
+		if cfg.TenantPool != nil {
+			r.Use(middleware.TenantTransaction(cfg.TenantPool))
+		}
+
+		for _, reg := range registrars {
+			reg.RegisterRoutes(r)
+		}
+	})
 
 	return &Server{
 		log: log,

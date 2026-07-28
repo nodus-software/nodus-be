@@ -319,3 +319,15 @@ func (q *Queries) GetUserRoleNames(ctx context.Context, userID string) ([]string
 	}
 	return items, nil
 }
+
+const restoreInvitedUser = `-- name: RestoreInvitedUser :exec
+UPDATE users SET status = 'invited'
+WHERE id = $1
+  AND password_hash IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) RestoreInvitedUser(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, restoreInvitedUser, id)
+	return err
+}

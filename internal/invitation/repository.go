@@ -21,6 +21,7 @@ type Repository interface {
 	ConsumeInvitation(ctx context.Context, id string) error
 
 	ActivateUserWithPassword(ctx context.Context, userID, passwordHash string) error
+	RestoreInvitedUser(ctx context.Context, userID string) error
 	CreateEnrollmentToken(ctx context.Context, token EnrollmentToken) error
 
 	// WithinTx runs fn with a Repository bound to a single database
@@ -28,9 +29,8 @@ type Repository interface {
 	WithinTx(ctx context.Context, fn func(Repository) error) error
 }
 
-// Mailer delivers out-of-band invitation messages. Structurally identical
-// to the Auth domain's Mailer interface — the same SMTP implementation
-// satisfies both without either domain importing the other.
+// Mailer delivers multipart invitation messages while keeping the service
+// independent of the concrete SMTP implementation.
 type Mailer interface {
-	Send(ctx context.Context, to, subject, body string) error
+	SendHTML(ctx context.Context, to, subject, textBody, htmlBody string) error
 }

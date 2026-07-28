@@ -9,4 +9,5 @@ var (
 	ErrProviderIdentifierRequired = errors.New("provider_identifier is required for the selected role(s)")
 	ErrSuperuserRequired          = errors.New("only a superuser may assign a superuser role")
 	ErrPermissionDenied           = errors.New("permission denied")
+	ErrInvitationPending          = errors.New("pending invitations cannot be managed as active users")
 )

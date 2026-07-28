@@ -24,15 +24,26 @@ type UserProfileResponse struct {
 	MFAEnrolled         bool       `json:"mfa_enrolled"`
 	LastAccessReviewAt  *time.Time `json:"last_access_review_at,omitempty"`
 	NextAccessReviewDue *time.Time `json:"next_access_review_due,omitempty"`
+	InvitationExpiresAt *time.Time `json:"invitation_expires_at,omitempty"`
+	InvitationStatus    *string    `json:"invitation_status,omitempty"`
 }
 
 func toUserProfileResponse(u User) UserProfileResponse {
-	return UserProfileResponse{
+	response := UserProfileResponse{
 		ID: u.ID, TenantID: u.TenantID, FullName: u.FullName, Username: u.Username, Email: u.Email,
 		ProviderIdentifier: u.ProviderIdentifier, Roles: u.RoleNames, Permissions: u.Permissions,
 		Status: string(u.Status), MFAEnrolled: u.MFAEnrolled,
 		LastAccessReviewAt: u.LastAccessReviewAt, NextAccessReviewDue: u.NextAccessReviewDue,
+		InvitationExpiresAt: u.InvitationExpiresAt,
 	}
+	if u.Status == StatusInvited && u.InvitationExpiresAt != nil {
+		status := "valid"
+		if u.InvitationUsedAt != nil || time.Now().After(*u.InvitationExpiresAt) {
+			status = "expired"
+		}
+		response.InvitationStatus = &status
+	}
+	return response
 }
 
 // UpdateUserRequest is the PATCH /users/{userId} body. RoleIDs is only

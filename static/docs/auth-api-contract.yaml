@@ -43,6 +43,7 @@ servers:
       tenant-scoped requests because localhost has no tenant subdomain.
 
 tags:
+  - name: Health
   - name: Organizations
   - name: Auth
   - name: MFA
@@ -53,6 +54,27 @@ tags:
   - name: AuditLog
 
 paths:
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Check whether the API process is running
+      description: Public liveness probe. Does not require tenant resolution or database access.
+      responses:
+        "200":
+          description: The API process is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, enum: [true] }
+                  data:
+                    type: object
+                    required: [status]
+                    properties:
+                      status: { type: string, enum: [ok] }
 
   # ---------------- ORGANIZATION (TENANT) REGISTRATION ----------------
 

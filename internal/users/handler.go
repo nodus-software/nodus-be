@@ -26,7 +26,7 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrUserNotFound), errors.Is(err, ErrRoleNotFound):
 		response.NotFound(w, err.Error())
-	case errors.Is(err, ErrNotLocked):
+	case errors.Is(err, ErrNotLocked), errors.Is(err, ErrInvitationPending):
 		response.Conflict(w, err.Error())
 	case errors.Is(err, ErrProviderIdentifierRequired):
 		response.Validation(w, map[string]string{"provider_identifier": err.Error()})

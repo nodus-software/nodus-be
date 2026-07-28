@@ -92,7 +92,13 @@ SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_ident
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
         SELECT 1 FROM mfa_factors mf WHERE mf.user_id = u.id AND mf.confirmed_at IS NOT NULL
-    ) AS mfa_enrolled
+    ) AS mfa_enrolled,
+    (SELECT i.expires_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_expires_at,
+    (SELECT i.used_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_used_at
 FROM users u
 LEFT JOIN user_roles ur ON ur.user_id = u.id
 LEFT JOIN roles r ON r.id = ur.role_id
@@ -122,6 +128,8 @@ type GetUserWithRolesByIDRow struct {
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
+	InvitationExpiresAt pgtype.Timestamptz `json:"invitation_expires_at"`
+	InvitationUsedAt    pgtype.Timestamptz `json:"invitation_used_at"`
 }
 
 func (q *Queries) GetUserWithRolesByID(ctx context.Context, id string) (GetUserWithRolesByIDRow, error) {
@@ -146,6 +154,8 @@ func (q *Queries) GetUserWithRolesByID(ctx context.Context, id string) (GetUserW
 		&i.RoleNames,
 		&i.PermissionCodes,
 		&i.MfaEnrolled,
+		&i.InvitationExpiresAt,
+		&i.InvitationUsedAt,
 	)
 	return i, err
 }
@@ -195,7 +205,13 @@ SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_ident
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
         SELECT 1 FROM mfa_factors mf WHERE mf.user_id = u.id AND mf.confirmed_at IS NOT NULL
-    ) AS mfa_enrolled
+    ) AS mfa_enrolled,
+    (SELECT i.expires_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_expires_at,
+    (SELECT i.used_at FROM invitations i
+     WHERE i.user_id = u.id AND i.tenant_id = u.tenant_id
+     ORDER BY i.created_at DESC LIMIT 1) AS invitation_used_at
 FROM users u
 LEFT JOIN user_roles ur ON ur.user_id = u.id
 LEFT JOIN roles r ON r.id = ur.role_id
@@ -242,6 +258,8 @@ type ListUsersRow struct {
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
+	InvitationExpiresAt pgtype.Timestamptz `json:"invitation_expires_at"`
+	InvitationUsedAt    pgtype.Timestamptz `json:"invitation_used_at"`
 }
 
 func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error) {
@@ -272,6 +290,8 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 			&i.RoleNames,
 			&i.PermissionCodes,
 			&i.MfaEnrolled,
+			&i.InvitationExpiresAt,
+			&i.InvitationUsedAt,
 		); err != nil {
 			return nil, err
 		}
