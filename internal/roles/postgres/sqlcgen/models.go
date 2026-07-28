@@ -340,6 +340,7 @@ type Session struct {
 	LastActiveAt pgtype.Timestamptz `json:"last_active_at"`
 	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
 	TenantID     string             `json:"tenant_id"`
+	RememberMe   bool               `json:"remember_me"`
 }
 
 type User struct {

@@ -1,6 +1,6 @@
 -- name: CreateSession :exec
-INSERT INTO sessions (id, user_id, device_label, ip_address, user_agent)
-VALUES ($1, $2, $3, $4, $5);
+INSERT INTO sessions (id, user_id, device_label, ip_address, user_agent, remember_me)
+VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: GetSessionByID :one
 SELECT * FROM sessions WHERE id = $1;

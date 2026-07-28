@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -14,13 +15,46 @@ import (
 )
 
 type Handler struct {
-	service   *Service
-	jwtSecret string
-	log       *logger.Logger
+	service       *Service
+	jwtSecret     string
+	log           *logger.Logger
+	refreshCookie RefreshCookieConfig
 }
 
-func NewHandler(service *Service, jwtSecret string, log *logger.Logger) *Handler {
-	return &Handler{service: service, jwtSecret: jwtSecret, log: log}
+type RefreshCookieConfig struct {
+	Name     string
+	Domain   string
+	Secure   bool
+	SameSite http.SameSite
+}
+
+func NewHandler(service *Service, jwtSecret string, log *logger.Logger, cookieConfigs ...RefreshCookieConfig) *Handler {
+	cfg := RefreshCookieConfig{Name: "nodus_refresh", SameSite: http.SameSiteLaxMode}
+	if len(cookieConfigs) > 0 {
+		cfg = cookieConfigs[0]
+	}
+	return &Handler{service: service, jwtSecret: jwtSecret, log: log, refreshCookie: cfg}
+}
+
+func (h *Handler) setRefreshCookie(w http.ResponseWriter, pair *TokenPairResponse) {
+	cookie := &http.Cookie{
+		Name: h.refreshCookie.Name, Value: pair.RefreshToken, Path: "/auth",
+		Domain: h.refreshCookie.Domain, HttpOnly: true, Secure: h.refreshCookie.Secure,
+		SameSite: h.refreshCookie.SameSite,
+	}
+	if pair.RememberMe {
+		cookie.Expires = pair.RefreshExpiresAt
+		cookie.MaxAge = max(1, int(time.Until(pair.RefreshExpiresAt).Seconds()))
+	}
+	http.SetCookie(w, cookie)
+}
+
+func (h *Handler) clearRefreshCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: h.refreshCookie.Name, Value: "", Path: "/auth", Domain: h.refreshCookie.Domain,
+		HttpOnly: true, Secure: h.refreshCookie.Secure, SameSite: h.refreshCookie.SameSite,
+		MaxAge: -1, Expires: time.Unix(1, 0).UTC(),
+	})
 }
 
 func clientIP(r *http.Request) string {
@@ -117,19 +151,31 @@ func (h *Handler) LoginMFA(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.setRefreshCookie(w, pair)
 	response.OK(w, pair)
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
-	req, ok := bindJSON[RefreshRequest](w, r)
-	if !ok {
+	cookie, err := r.Cookie(h.refreshCookie.Name)
+	if err != nil || cookie.Value == "" {
+		h.clearRefreshCookie(w)
+		h.writeError(w, ErrRefreshTokenInvalid)
 		return
 	}
-	pair, err := h.service.Refresh(r.Context(), req)
+	pair, err := h.service.Refresh(r.Context(), cookie.Value)
 	if err != nil {
+		// A revoked token may be a harmless concurrent replay after another tab has
+		// already rotated the shared cookie. Do not let the losing response erase the
+		// newly issued cookie. Unknown/expired tokens are still cleared.
+		if !errors.Is(err, ErrRefreshTokenRevoked) {
+			h.clearRefreshCookie(w)
+		}
 		h.writeError(w, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.setRefreshCookie(w, pair)
 	response.OK(w, pair)
 }
 
@@ -142,6 +188,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
+	h.clearRefreshCookie(w)
 	response.NoContent(w)
 }
 

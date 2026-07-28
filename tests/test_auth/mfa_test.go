@@ -2,6 +2,7 @@ package test_auth
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -21,13 +22,19 @@ func TestLoginMFA_GoldenPath_IssuesTokenPair(t *testing.T) {
 	}
 
 	var pair struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
 	}
 	Decode(t, rec, &pair)
-	if pair.AccessToken == "" || pair.RefreshToken == "" || pair.ExpiresIn <= 0 {
+	if pair.AccessToken == "" || pair.ExpiresIn <= 0 {
 		t.Fatalf("expected a populated token pair, got %+v", pair)
+	}
+	if strings.Contains(rec.Body.String(), "refresh_token") {
+		t.Fatal("refresh token must not be exposed in the JSON response")
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].Value == "" {
+		t.Fatalf("expected an HttpOnly refresh cookie, got %#v", cookies)
 	}
 }
 

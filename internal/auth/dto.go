@@ -21,16 +21,15 @@ type VerifyMFARequest struct {
 	ChallengeToken string `json:"challenge_token" validate:"required"`
 	Method         string `json:"method" validate:"required,oneof=totp biometric"`
 	Code           string `json:"code" validate:"required"`
+	RememberMe     bool   `json:"remember_me"`
 }
 
 type TokenPairResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-}
-
-type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token" validate:"required"`
+	AccessToken      string    `json:"access_token"`
+	ExpiresIn        int       `json:"expires_in"`
+	RefreshToken     string    `json:"-"`
+	RefreshExpiresAt time.Time `json:"-"`
+	RememberMe       bool      `json:"-"`
 }
 
 type UserProfileResponse struct {

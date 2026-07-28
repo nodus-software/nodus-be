@@ -41,11 +41,12 @@ type PasswordPolicy struct {
 type Config struct {
 	BaseURL string
 
-	JWTSecret             string
-	AccessTokenTTL        time.Duration
-	RefreshTokenTTL       time.Duration
-	ChallengeTokenTTL     time.Duration
-	PasswordResetTokenTTL time.Duration
+	JWTSecret              string
+	AccessTokenTTL         time.Duration
+	RefreshTokenTTL        time.Duration
+	SessionRefreshTokenTTL time.Duration
+	ChallengeTokenTTL      time.Duration
+	PasswordResetTokenTTL  time.Duration
 
 	BcryptCost int
 
@@ -208,7 +209,7 @@ func (s *Service) VerifyMFA(ctx context.Context, req VerifyMFARequest, ip, userA
 		return nil, s.handleFailedAttempt(ctx, user, ip, "mfa_code_invalid")
 	}
 
-	pair, err := s.establishSession(ctx, user, challenge, ip, userAgent, deviceLabel, now)
+	pair, err := s.establishSession(ctx, user, challenge, ip, userAgent, deviceLabel, req.RememberMe, now)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +259,7 @@ func (s *Service) verifyMFACode(ctx context.Context, user *User, req VerifyMFARe
 	return false, nil
 }
 
-func (s *Service) establishSession(ctx context.Context, user *User, challenge *LoginChallenge, ip, userAgent, deviceLabel string, now time.Time) (*TokenPairResponse, error) {
+func (s *Service) establishSession(ctx context.Context, user *User, challenge *LoginChallenge, ip, userAgent, deviceLabel string, rememberMe bool, now time.Time) (*TokenPairResponse, error) {
 	var pair *TokenPairResponse
 	err := s.repo.WithinTx(ctx, func(repo Repository) error {
 		if err := repo.ConsumeLoginChallenge(ctx, challenge.ID); err != nil {
@@ -274,6 +275,7 @@ func (s *Service) establishSession(ctx context.Context, user *User, challenge *L
 		}
 		if err := repo.CreateSession(ctx, Session{
 			ID: sessionID, UserID: user.ID, DeviceLabel: deviceLabel, IPAddress: ip, UserAgent: userAgent,
+			RememberMe: rememberMe,
 		}); err != nil {
 			return err
 		}
@@ -286,9 +288,14 @@ func (s *Service) establishSession(ctx context.Context, user *User, challenge *L
 		if err != nil {
 			return err
 		}
+		refreshTTL := s.cfg.SessionRefreshTokenTTL
+		if rememberMe {
+			refreshTTL = s.cfg.RefreshTokenTTL
+		}
+		refreshExpiresAt := now.Add(refreshTTL)
 		if err := repo.CreateRefreshToken(ctx, RefreshToken{
 			ID: refreshID, SessionID: sessionID, UserID: user.ID,
-			TokenHash: security.HashToken(rawRefresh), ExpiresAt: now.Add(s.cfg.RefreshTokenTTL),
+			TokenHash: security.HashToken(rawRefresh), ExpiresAt: refreshExpiresAt,
 		}); err != nil {
 			return err
 		}
@@ -300,8 +307,8 @@ func (s *Service) establishSession(ctx context.Context, user *User, challenge *L
 		}
 
 		pair = &TokenPairResponse{
-			AccessToken: accessToken, RefreshToken: rawRefresh,
-			ExpiresIn: int(time.Until(accessExpiry).Seconds()),
+			AccessToken: accessToken, RefreshToken: rawRefresh, RefreshExpiresAt: refreshExpiresAt,
+			RememberMe: rememberMe, ExpiresIn: int(time.Until(accessExpiry).Seconds()),
 		}
 		return nil
 	})
@@ -327,8 +334,11 @@ func verifyBiometricAssertion(publicKeyB64, challengeToken, signatureB64 string)
 
 // Refresh exchanges a valid refresh token for a new access/refresh pair,
 // rotating the refresh token.
-func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (*TokenPairResponse, error) {
-	token, err := s.repo.GetRefreshTokenByHash(ctx, security.HashToken(req.RefreshToken))
+func (s *Service) Refresh(ctx context.Context, rawRefreshToken string) (*TokenPairResponse, error) {
+	if rawRefreshToken == "" {
+		return nil, ErrRefreshTokenInvalid
+	}
+	token, err := s.repo.GetRefreshTokenByHash(ctx, security.HashToken(rawRefreshToken))
 	if err != nil {
 		return nil, err
 	}
@@ -362,9 +372,14 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (*TokenPairRe
 		if err != nil {
 			return err
 		}
+		refreshTTL := s.cfg.SessionRefreshTokenTTL
+		if session.RememberMe {
+			refreshTTL = s.cfg.RefreshTokenTTL
+		}
+		refreshExpiresAt := now.Add(refreshTTL)
 		if err := repo.CreateRefreshToken(ctx, RefreshToken{
 			ID: newID, SessionID: token.SessionID, UserID: token.UserID,
-			TokenHash: security.HashToken(newRaw), ExpiresAt: now.Add(s.cfg.RefreshTokenTTL),
+			TokenHash: security.HashToken(newRaw), ExpiresAt: refreshExpiresAt,
 		}); err != nil {
 			return err
 		}
@@ -377,7 +392,7 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (*TokenPairRe
 		if err != nil {
 			return err
 		}
-		pair = &TokenPairResponse{AccessToken: access, RefreshToken: newRaw, ExpiresIn: int(time.Until(expiry).Seconds())}
+		pair = &TokenPairResponse{AccessToken: access, RefreshToken: newRaw, RefreshExpiresAt: refreshExpiresAt, RememberMe: session.RememberMe, ExpiresIn: int(time.Until(expiry).Seconds())}
 		return nil
 	})
 	return pair, err

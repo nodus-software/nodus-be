@@ -250,9 +250,26 @@ paths:
                 challenge_token: { type: string }
                 method: { type: string, enum: [totp, biometric] }
                 code: { type: string, description: "TOTP code, or biometric assertion payload" }
+                remember_me:
+                  type: boolean
+                  default: false
+                  description: >
+                    When true, the refresh-token cookie persists across browser restarts
+                    and uses the configured remembered-session lifetime (30 days by
+                    default). When false, a browser-session cookie and the shorter
+                    session refresh-token lifetime (24 hours by default) are used.
       responses:
         "200":
-          description: MFA verified; authenticated session established
+          description: >
+            MFA verified and authenticated session established. The rotating refresh
+            token is issued only in an HttpOnly cookie and is not present in the JSON body.
+          headers:
+            Set-Cookie:
+              description: >
+                HttpOnly refresh-token cookie. Secure is required in production; SameSite,
+                domain, persistence and expiry are controlled by server configuration and
+                remember_me.
+              schema: { type: string }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TokenPairResponse" }
@@ -262,19 +279,19 @@ paths:
   /auth/refresh:
     post:
       tags: [Auth]
-      summary: Exchange a valid refresh token for a new access token
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [refresh_token]
-              properties:
-                refresh_token: { type: string }
+      summary: Rotate the HttpOnly refresh cookie and issue a new access token
+      description: >
+        The request has no JSON body. Browsers must include credentials so the HttpOnly
+        refresh cookie is sent. Rotation preserves the remember_me choice and server-side
+        lifetime recorded on the session. Invalid, expired, or replayed cookies are cleared.
+      security: [{ refreshCookie: [] }]
       responses:
         "200":
-          description: New token pair issued
+          description: New access token issued and refresh cookie rotated
+          headers:
+            Set-Cookie:
+              description: Rotated HttpOnly refresh-token cookie
+              schema: { type: string }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TokenPairResponse" }
@@ -287,7 +304,7 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "204":
-          description: Logged out; session revoked and logged in audit trail
+          description: Logged out; session revoked, refresh cookie cleared, and event audited
 
   /auth/me:
     get:
@@ -853,6 +870,15 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: nodus_refresh
+      description: >
+        Rotating opaque refresh token. Issued HttpOnly, Secure in production, and
+        SameSite=Lax by default (Strict is also supported). Cross-site cookie mode is
+        intentionally unsupported without a separate CSRF-token design. JavaScript must
+        never read or persist its value.
 
   parameters:
     TenantSlugHeader:
@@ -1171,9 +1197,9 @@ components:
 
     TokenPair:
       type: object
+      required: [access_token, expires_in]
       properties:
         access_token: { type: string }
-        refresh_token: { type: string }
         expires_in: { type: integer, description: "Access token TTL in seconds" }
 
     UserProfile:

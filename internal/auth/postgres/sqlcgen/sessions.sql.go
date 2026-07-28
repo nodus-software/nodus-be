@@ -10,8 +10,8 @@ import (
 )
 
 const createSession = `-- name: CreateSession :exec
-INSERT INTO sessions (id, user_id, device_label, ip_address, user_agent)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO sessions (id, user_id, device_label, ip_address, user_agent, remember_me)
+VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type CreateSessionParams struct {
@@ -20,6 +20,7 @@ type CreateSessionParams struct {
 	DeviceLabel string `json:"device_label"`
 	IpAddress   string `json:"ip_address"`
 	UserAgent   string `json:"user_agent"`
+	RememberMe  bool   `json:"remember_me"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
@@ -29,12 +30,13 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 		arg.DeviceLabel,
 		arg.IpAddress,
 		arg.UserAgent,
+		arg.RememberMe,
 	)
 	return err
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at, tenant_id FROM sessions WHERE id = $1
+SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at, tenant_id, remember_me FROM sessions WHERE id = $1
 `
 
 func (q *Queries) GetSessionByID(ctx context.Context, id string) (Session, error) {
@@ -50,12 +52,13 @@ func (q *Queries) GetSessionByID(ctx context.Context, id string) (Session, error
 		&i.LastActiveAt,
 		&i.RevokedAt,
 		&i.TenantID,
+		&i.RememberMe,
 	)
 	return i, err
 }
 
 const listActiveSessionsByUser = `-- name: ListActiveSessionsByUser :many
-SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at, tenant_id FROM sessions
+SELECT id, user_id, device_label, ip_address, user_agent, created_at, last_active_at, revoked_at, tenant_id, remember_me FROM sessions
 WHERE user_id = $1 AND revoked_at IS NULL
 ORDER BY last_active_at DESC
 `
@@ -79,6 +82,7 @@ func (q *Queries) ListActiveSessionsByUser(ctx context.Context, userID string) (
 			&i.LastActiveAt,
 			&i.RevokedAt,
 			&i.TenantID,
+			&i.RememberMe,
 		); err != nil {
 			return nil, err
 		}

@@ -72,7 +72,7 @@ func Setup(t *testing.T) *Env {
 	mailer := &memoryMailer{}
 	service := auth.NewService(repo, discardAudit{}, mailer, logger.NewLogger(), auth.Config{
 		BaseURL: cfg.BaseUrl, JWTSecret: "test-jwt-secret", AccessTokenTTL: time.Hour,
-		RefreshTokenTTL: 24 * time.Hour, ChallengeTokenTTL: 5 * time.Minute,
+		RefreshTokenTTL: 24 * time.Hour, SessionRefreshTokenTTL: 2 * time.Hour, ChallengeTokenTTL: 5 * time.Minute,
 		PasswordResetTokenTTL: time.Hour, BcryptCost: 4, TOTPIssuer: "Nodus Test",
 		MFABackupCodeCount: 3, MFAEncryptionKey: encryptionKey, LockoutMaxAttempts: cfg.LockoutMaxAttempts,
 		LockoutDuration: time.Hour, PasswordResetMaxPerUsernamePerHour: cfg.PasswordResetMaxPerUsernamePerHour,
@@ -84,6 +84,10 @@ func Setup(t *testing.T) *Env {
 }
 
 func (e *Env) JSON(t *testing.T, method, path, accessToken string, body any) *httptest.ResponseRecorder {
+	return e.JSONWithCookie(t, method, path, accessToken, body, nil)
+}
+
+func (e *Env) JSONWithCookie(t *testing.T, method, path, accessToken string, body any, cookie *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *strings.Reader
 	if body == nil {
@@ -101,6 +105,9 @@ func (e *Env) JSON(t *testing.T, method, path, accessToken string, body any) *ht
 	}
 	if accessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	if cookie != nil {
+		req.AddCookie(cookie)
 	}
 	rec := httptest.NewRecorder()
 	e.Router.ServeHTTP(rec, req)
@@ -194,18 +201,28 @@ func (e *Env) IssueAccessToken(t *testing.T, userID, sessionID string) string {
 	return token
 }
 func (e *Env) CompleteLogin(t *testing.T, email, password, secret string) (string, string) {
+	return e.CompleteLoginRemember(t, email, password, secret, false)
+}
+
+func (e *Env) CompleteLoginRemember(t *testing.T, email, password, secret string, rememberMe bool) (string, string) {
 	t.Helper()
 	challenge := loginToChallenge(t, e, email, password)
-	rec := e.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]string{"challenge_token": challenge, "method": "totp", "code": CurrentTOTPCode(t, secret)})
+	rec := e.JSON(t, http.MethodPost, "/auth/login/mfa", "", map[string]any{"challenge_token": challenge, "method": "totp", "code": CurrentTOTPCode(t, secret), "remember_me": rememberMe})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("complete login: %d %s", rec.Code, rec.Body.String())
 	}
 	var pair struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
+		AccessToken string `json:"access_token"`
 	}
 	Decode(t, rec, &pair)
-	return pair.AccessToken, pair.RefreshToken
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "nodus_refresh" || cookies[0].Value == "" {
+		t.Fatalf("expected HttpOnly refresh cookie, got %#v", cookies)
+	}
+	if !cookies[0].HttpOnly {
+		t.Fatal("refresh cookie must be HttpOnly")
+	}
+	return pair.AccessToken, cookies[0].Value
 }
 
 func loginToChallenge(t *testing.T, env *Env, email, password string) string {
@@ -426,6 +443,9 @@ func (r *memoryRepo) RevokeRefreshToken(_ context.Context, id string) error {
 	t, ok := r.refresh[id]
 	if !ok {
 		return auth.ErrRefreshTokenInvalid
+	}
+	if t.RevokedAt != nil {
+		return auth.ErrRefreshTokenRevoked
 	}
 	n := time.Now()
 	t.RevokedAt = &n

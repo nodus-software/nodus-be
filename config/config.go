@@ -46,9 +46,14 @@ type Config struct {
 	RedisPassword string
 
 	// Auth / JWT
-	JWTSecret       string
-	AccessTokenTTL  time.Duration
-	RefreshTokenTTL time.Duration
+	JWTSecret              string
+	AccessTokenTTL         time.Duration
+	RefreshTokenTTL        time.Duration
+	SessionRefreshTokenTTL time.Duration
+	RefreshCookieName      string
+	RefreshCookieDomain    string
+	RefreshCookieSecure    bool
+	RefreshCookieSameSite  string
 
 	// Fixed by the API contract, not environment-tunable.
 	ChallengeTokenTTL     time.Duration
@@ -137,9 +142,14 @@ func Load() (*Config, error) {
 		RedisAddr:     getEnv("REDIS_ADDRESS", "localhost:6379"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 
-		JWTSecret:       requiredWithDevDefault("JWT_SECRET", development, "development-only-change-me"),
-		AccessTokenTTL:  getEnvDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTokenTTL: getEnvDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		JWTSecret:              requiredWithDevDefault("JWT_SECRET", development, "development-only-change-me"),
+		AccessTokenTTL:         getEnvDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:        getEnvDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		SessionRefreshTokenTTL: getEnvDuration("SESSION_REFRESH_TOKEN_TTL", 24*time.Hour),
+		RefreshCookieName:      getEnv("REFRESH_COOKIE_NAME", "nodus_refresh"),
+		RefreshCookieDomain:    getEnv("REFRESH_COOKIE_DOMAIN", ""),
+		RefreshCookieSecure:    getEnvBool("REFRESH_COOKIE_SECURE", !development),
+		RefreshCookieSameSite:  strings.ToLower(getEnv("REFRESH_COOKIE_SAME_SITE", "lax")),
 
 		ChallengeTokenTTL:     5 * time.Minute,
 		PasswordResetTokenTTL: 15 * time.Minute,
@@ -172,6 +182,16 @@ func Load() (*Config, error) {
 		SmtpPort:     getEnv("SMTP_PORT", ""),
 		SmtpSender:   getEnv("SMTP_SENDER", ""),
 		SmtpPassword: getEnv("SMTP_PASSWORD", ""),
+	}
+
+	if cfg.SessionRefreshTokenTTL <= 0 || cfg.RefreshTokenTTL <= 0 || cfg.SessionRefreshTokenTTL > cfg.RefreshTokenTTL {
+		return nil, fmt.Errorf("SESSION_REFRESH_TOKEN_TTL must be positive and no greater than REFRESH_TOKEN_TTL")
+	}
+	if cfg.RefreshCookieName == "" || strings.ContainsAny(cfg.RefreshCookieName, "\t\r\n ;,") {
+		return nil, fmt.Errorf("REFRESH_COOKIE_NAME is invalid")
+	}
+	if cfg.RefreshCookieSameSite != "lax" && cfg.RefreshCookieSameSite != "strict" {
+		return nil, fmt.Errorf("REFRESH_COOKIE_SAME_SITE must be lax or strict")
 	}
 
 	return cfg, nil

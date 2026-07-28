@@ -33,7 +33,14 @@ func (r *Repository) GetRefreshTokenByHash(ctx context.Context, tokenHash string
 }
 
 func (r *Repository) RevokeRefreshToken(ctx context.Context, id string) error {
-	return r.q(ctx).RevokeRefreshToken(ctx, id)
+	rows, err := r.q(ctx).RevokeRefreshToken(ctx, id)
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return auth.ErrRefreshTokenRevoked
+	}
+	return nil
 }
 
 func (r *Repository) RevokeRefreshTokensByUser(ctx context.Context, userID string) error {

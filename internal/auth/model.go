@@ -80,6 +80,7 @@ type Session struct {
 	DeviceLabel  string
 	IPAddress    string
 	UserAgent    string
+	RememberMe   bool
 	CreatedAt    time.Time
 	LastActiveAt time.Time
 	RevokedAt    *time.Time

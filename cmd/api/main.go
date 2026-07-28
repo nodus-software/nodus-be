@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os/signal"
 	"syscall"
 
@@ -60,11 +61,12 @@ func main() {
 	authCfg := auth.Config{
 		BaseURL: cfg.BaseUrl,
 
-		JWTSecret:             cfg.JWTSecret,
-		AccessTokenTTL:        cfg.AccessTokenTTL,
-		RefreshTokenTTL:       cfg.RefreshTokenTTL,
-		ChallengeTokenTTL:     cfg.ChallengeTokenTTL,
-		PasswordResetTokenTTL: cfg.PasswordResetTokenTTL,
+		JWTSecret:              cfg.JWTSecret,
+		AccessTokenTTL:         cfg.AccessTokenTTL,
+		RefreshTokenTTL:        cfg.RefreshTokenTTL,
+		SessionRefreshTokenTTL: cfg.SessionRefreshTokenTTL,
+		ChallengeTokenTTL:      cfg.ChallengeTokenTTL,
+		PasswordResetTokenTTL:  cfg.PasswordResetTokenTTL,
 
 		BcryptCost: cfg.BcryptCost,
 
@@ -89,7 +91,15 @@ func main() {
 	}
 
 	authService := auth.NewService(authRepo, auditService, mailer, log, authCfg)
-	authHandler := auth.NewHandler(authService, cfg.JWTSecret, log)
+	sameSite := http.SameSiteLaxMode
+	switch cfg.RefreshCookieSameSite {
+	case "strict":
+		sameSite = http.SameSiteStrictMode
+	}
+	authHandler := auth.NewHandler(authService, cfg.JWTSecret, log, auth.RefreshCookieConfig{
+		Name: cfg.RefreshCookieName, Domain: cfg.RefreshCookieDomain,
+		Secure: cfg.RefreshCookieSecure, SameSite: sameSite,
+	})
 
 	// authService.Authorize (session/user validity + effective permissions)
 	// is the single Authorizer every domain's Authenticate middleware uses,

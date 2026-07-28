@@ -13,7 +13,7 @@ import (
 func sessionFromRow(s sqlcgen.Session) *auth.Session {
 	return &auth.Session{
 		ID: s.ID, TenantID: s.TenantID, UserID: s.UserID, DeviceLabel: s.DeviceLabel, IPAddress: s.IpAddress,
-		UserAgent: s.UserAgent, CreatedAt: fromTimestamptz(s.CreatedAt),
+		UserAgent: s.UserAgent, RememberMe: s.RememberMe, CreatedAt: fromTimestamptz(s.CreatedAt),
 		LastActiveAt: fromTimestamptz(s.LastActiveAt), RevokedAt: fromNullTimestamptz(s.RevokedAt),
 	}
 }
@@ -21,7 +21,7 @@ func sessionFromRow(s sqlcgen.Session) *auth.Session {
 func (r *Repository) CreateSession(ctx context.Context, session auth.Session) error {
 	return r.q(ctx).CreateSession(ctx, sqlcgen.CreateSessionParams{
 		ID: session.ID, UserID: session.UserID, DeviceLabel: session.DeviceLabel,
-		IpAddress: session.IPAddress, UserAgent: session.UserAgent,
+		IpAddress: session.IPAddress, UserAgent: session.UserAgent, RememberMe: session.RememberMe,
 	})
 }
 

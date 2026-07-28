@@ -1,0 +1,609 @@
+IMPLEMENTATION PROMPT: COMPLETE AND HARDEN MULTI-FACTOR AUTHENTICATION
+
+You are working on Nodus Health, a multi-tenant health information system intended
+to meet Kenyan Digital Health Agency (DHA) security, privacy, confidentiality,
+access-control, and auditability expectations.
+
+Repositories
+============
+
+- Backend: /home/berylatieno/workspace/nodus/nodus-be
+- Frontend: /home/berylatieno/workspace/nodus/nodus-fe (relative to the backend:
+  ../nodus-fe)
+
+Implement the complete change across both repositories. Inspect the current working
+trees first and preserve all unrelated user changes. Follow any AGENTS.md instructions
+you find. Use apply_patch for hand-written edits, keep generated sqlc files synchronized
+with their source queries, and verify the finished implementation with the repositories'
+normal test/build/lint commands.
+
+Goal
+====
+
+Provide a usable and secure MFA experience for users who may not always have access
+to an authenticator-app TOTP code. The supported paths must be:
+
+1. Authenticator-app TOTP.
+2. Standards-compliant WebAuthn passkeys and roaming hardware security keys, used as
+   a second factor after password verification (not passwordless authentication).
+3. One-time offline recovery codes for emergency login.
+4. An administrator-approved, fully audited MFA reset as the final recovery path.
+
+Do not implement email OTP, SMS OTP, security questions, or an email-only recovery
+bypass. Email may carry security notifications and a short-lived link created by an
+authorized administrator, but possession of that email link must not be sufficient to
+reset MFA: the user must also confirm their existing password.
+
+Treat security and tenant isolation as acceptance criteria, not optional polish.
+
+Current implementation problems to resolve
+==========================================
+
+Confirm these facts against the current code before editing:
+
+- The backend recognizes MFA factor types "totp" and "biometric".
+- "biometric" is a custom Ed25519 public-key/signature mechanism. It is not WebAuthn:
+  it does not correctly validate the relying-party ID, origin, authenticator data,
+  client data, user verification, credential counters, or a real WebAuthn ceremony.
+- The frontend calls navigator.credentials but sends only credential raw IDs into the
+  custom biometric API. Registration and login are therefore incompatible with the
+  backend and must not be retained as a production authentication path.
+- Backup codes already exist in mfa_backup_codes, but the login service accepts them
+  by overloading method="totp". The frontend strips non-digits and only permits six
+  characters, so users cannot actually enter the generated recovery-code format.
+- TOTP setup currently creates backup codes before the TOTP factor is confirmed. Avoid
+  leaving usable recovery credentials behind after an abandoned/failed enrollment.
+- There is no recovery-code status/regeneration UI, no administrator MFA reset, and no
+  viable sole-administrator recovery flow.
+- My Account -> Security currently offers "Add authenticator app" and "Add biometric."
+  Review this entire section and adjust its content, actions, states, and terminology.
+- The biometric registration route and frontend onboarding auth mode are also
+  inconsistent. Replace this path rather than patching the custom protocol.
+
+Implementation order
+====================
+
+Implement in coherent stages so each stage is tested before the next:
+
+1. Make recovery codes an explicit, usable login method and harden their lifecycle.
+2. Replace the biometric implementation with real WebAuthn passkeys/security keys.
+3. Add administrator-approved MFA reset and its recovery/enrollment flow.
+4. Complete the frontend UX, documentation, migration/rollout instructions, and
+   end-to-end verification.
+
+BACKEND REQUIREMENTS
+====================
+
+1. Explicit recovery-code authentication
+----------------------------------------
+
+- Add "recovery_code" as an explicit login MFA method. It is an emergency
+  authentication method, not an MFA factor displayed in the factor list.
+- POST /auth/login must include "recovery_code" in mfa_methods only when the user has
+  at least one unused recovery code. Do not reveal a count before password validation.
+- POST /auth/login/mfa must accept:
+
+    {
+      "challenge_token": "...",
+      "method": "recovery_code",
+      "code": "..."
+    }
+
+- Normalize recovery-code input safely (for example, trim whitespace and accept the
+  displayed separator/case convention), but do not apply TOTP's digits-only rules.
+  Define one canonical representation before hashing and use it consistently for
+  generation and verification.
+- Preserve TOTP as method="totp" and stop accepting recovery codes through that method.
+- Consume a recovery code atomically with consuming the login challenge and creating
+  the authenticated session. A failed transaction must not burn the code, and concurrent
+  attempts must not both succeed. Add the necessary conditional SQL/update semantics.
+- Recovery-code failure must participate in the existing failed-attempt, lockout,
+  generic-error, IP, and audit behavior. Never log or return submitted codes or hashes.
+- Use cryptographically random, high-entropy, human-transcribable codes. Store only
+  hashes. Do not weaken entropy merely for shorter UI text.
+
+Recovery-code lifecycle APIs:
+
+- Add an authenticated endpoint that reports only recovery-code status, including the
+  number of unused codes. It must never return existing codes.
+- Add an authenticated regeneration endpoint. Require the caller's current password in
+  addition to their already MFA-authenticated session. In one transaction, invalidate
+  all previous recovery codes and generate a complete replacement set. Return the new
+  plaintext codes once, in that response only.
+- Audit successful and failed regeneration without secrets. Notify the user by email
+  after successful regeneration.
+- Do not regenerate codes merely because another TOTP or passkey is added.
+- Recovery codes should be created only after the user's first strong factor is
+  successfully enrolled. For initial invitation, organization activation, reactivation,
+  or MFA-reset enrollment, return the new codes once after factor confirmation and before
+  consuming/completing the enrollment flow. Make factor confirmation, code creation, and
+  enrollment-token consumption transactional so an interrupted flow is recoverable and
+  does not create ambiguous credential state.
+- If the current API shape makes that transaction impossible, refactor service ownership
+  rather than coordinating security-sensitive writes non-atomically in HTTP handlers.
+
+Use clear response DTOs. A reasonable contract is:
+
+- GET /auth/mfa/recovery-codes/status
+  -> { "remaining": 7, "generated": true }
+- POST /auth/mfa/recovery-codes/regenerate
+  body { "current_password": "..." }
+  -> { "recovery_codes": ["..."], "remaining": 10 }
+
+Keep the configured recovery-code count as the source of truth. Use the project's normal
+success envelope and error conventions.
+
+2. Standards-compliant WebAuthn
+-------------------------------
+
+- Remove the custom Ed25519 biometric verification and registration code. Replace the
+  externally visible method/factor name "biometric" with "webauthn".
+- Use the maintained github.com/go-webauthn/webauthn Go library (verify the current
+  official API/version before integrating). Do not hand-roll attestation/assertion
+  parsing or cryptographic verification.
+- Configure explicit values for relying-party display name, RP ID, and allowed origins.
+  Add validated environment/config fields and document production HTTPS requirements
+  and intentional localhost development values. Do not infer security boundaries from
+  untrusted Host or Origin headers.
+- WebAuthn remains a second factor: password verification and the existing short-lived
+  login challenge happen first. Do not add username-less or passwordless login.
+- Support both platform authenticators/passkeys and cross-platform roaming security
+  keys. Do not force a single attachment type. Require user verification. Use attestation
+  conveyance "none" unless an existing documented policy requires managed attestation.
+- Let the library choose/validate appropriate supported public-key algorithms; do not
+  assume every authenticator supports only one algorithm.
+- Store complete credential data needed by the library, including credential ID,
+  public key, sign counter, transports/flags as applicable, user association, label,
+  creation time, and tenant ownership. Credential IDs must be unique. Never store
+  private keys.
+- Persist WebAuthn ceremony/session data server-side so multiple application instances
+  work correctly. Ceremony records must be tenant-bound, user-bound, purpose-bound
+  (registration or authentication), short-lived, one-time-use, and safe against replay.
+  Do not place trusted ceremony state solely in browser storage.
+- Validate RP ID, allowed origin, challenge, ceremony purpose, credential ownership,
+  user presence, required user verification, signature, and sign counter through the
+  library. Handle possible cloned-authenticator/sign-counter warnings deliberately and
+  audit the outcome without exposing credential material.
+- Registration by a signed-in established user must require current-password
+  confirmation to reduce the risk of a stolen session adding a new factor. Registration
+  under a valid enrollment token does not require another password submission because
+  the onboarding/reactivation/reset flow has already established it.
+- Allow multiple WebAuthn credentials per user and require a user-supplied, trimmed,
+  non-empty device label of reasonable length so credentials can be distinguished.
+- Do not include credential IDs or detailed authenticator data in security logs.
+
+Expose explicit ceremony endpoints rather than opaque strings. Use these routes unless
+an existing route convention requires a narrowly justified equivalent:
+
+- POST /auth/mfa/webauthn/register/options
+  Auth: access session or enrollment token
+  Established-session body: { "current_password": "...", "label": "..." }
+  Enrollment body: { "label": "..." }
+  Returns PublicKeyCredentialCreationOptions plus a server ceremony identifier.
+- POST /auth/mfa/webauthn/register/verify
+  Auth: same access session or enrollment token
+  Body: ceremony identifier plus the complete browser registration credential.
+  Returns the created MFA factor and, for first-factor enrollment only, the one-time
+  recovery codes.
+- POST /auth/login/mfa/webauthn/options
+  Auth: none
+  Body: { "challenge_token": "..." }
+  Returns PublicKeyCredentialRequestOptions plus a server ceremony identifier.
+- POST /auth/login/mfa/webauthn/verify
+  Auth: none
+  Body: login challenge token, ceremony identifier, and complete browser assertion.
+  On success, atomically consumes both challenges, updates credential state, and returns
+  the normal token pair.
+
+Do not establish a session from the options endpoint. Apply the login challenge TTL and
+single-use behavior to the WebAuthn flow, and do not let an options request extend the
+original password-verified login window.
+
+Legacy biometric migration and rollout:
+
+- Add an up/down migration after the repository's current latest migration. Modify the
+  database factor enum/check constraints and schema as needed for WebAuthn credentials
+  and persisted ceremonies. Keep RLS enabled and forced, add tenant-isolation policies,
+  tenant-stamping behavior, foreign keys, uniqueness, and expiry/query indexes consistent
+  with existing tables.
+- Legacy "biometric" records cannot be converted into WebAuthn credentials. Invalidate
+  and remove them during rollout; do not relabel or trust their stored public_key values.
+- Before deletion, provide a documented read-only preflight query listing/counting users
+  whose only confirmed factor is biometric. Those users will require the administrator
+  recovery process and WebAuthn/TOTP reenrollment.
+- Users who also have confirmed TOTP must retain TOTP access. Removing biometric must not
+  affect their TOTP or valid recovery codes.
+- The down migration may restore schema support but cannot recreate deleted insecure
+  credentials. State that limitation explicitly and make rollback safe and honest.
+- Remove obsolete Ed25519 imports, helpers, DTOs, routes, tests, and misleading comments.
+
+3. Factor management invariants
+-------------------------------
+
+- Strong factors are confirmed TOTP factors and verified WebAuthn credentials.
+  Recovery codes do not count as a strong factor.
+- Permit at most one confirmed TOTP factor per user. Prevent duplicate pending TOTP
+  setup records and cleanly replace/expire abandoned pending enrollment as appropriate.
+- Permit multiple individually named WebAuthn credentials.
+- Never allow a user to remove their last confirmed strong factor. Enforce this in the
+  backend transactionally; frontend disabling is only a usability aid.
+- Factor list responses must identify type, label, and created_at, but not secrets,
+  public keys, credential IDs, counters, or ceremony data.
+- Factor removal is security-sensitive. Require current-password confirmation for an
+  established user's removal request, notify the user, and audit success/failure. Keep
+  the existing endpoint only if its request semantics can be updated clearly in the
+  OpenAPI contract; otherwise introduce an explicit removal action and migrate the
+  frontend.
+- Removing a WebAuthn credential must not delete unrelated credentials or recovery codes.
+- TOTP secrets must remain encrypted at rest and must never appear after the initial
+  setup response. Do not expose secrets in logs or errors.
+
+4. Administrator-approved MFA reset
+-----------------------------------
+
+- Add a distinct permission code: users:mfa_reset. Include it in the permission catalog,
+  migration, default superuser permission assignment behavior, frontend permission
+  catalog, role editing UI, and OpenAPI documentation.
+- Add an authenticated admin endpoint:
+
+    POST /users/{userId}/mfa-reset
+    Permission: users:mfa_reset
+    Body: { "reason": "required non-empty operational reason" }
+    Response: 202 Accepted (generic status; never return the raw token)
+
+- Administrators must not reset their own MFA through this endpoint. This prevents an
+  active stolen admin session from replacing its own factors. A tenant's sole admin is
+  handled only through the controlled support runbook below.
+- Reject invited, deactivated, or otherwise ineligible accounts with appropriate
+  conflict responses. Do not silently reactivate or change the target user's status.
+- On an approved request, create a random, hashed, single-use, short-lived MFA recovery
+  token, invalidate earlier MFA-reset tokens for that user, revoke active sessions and
+  refresh tokens, consume outstanding login challenges, and send the link to the user's
+  already registered email. Do this transactionally where feasible; if mail delivery is
+  outside the database transaction, follow the project's established secure mail/error
+  pattern and make retries non-duplicative.
+- Store tenant ID, target user, requesting administrator, hashed token, timestamps, and
+  the stated reason. Apply forced RLS and tenant isolation.
+- Add public endpoints comparable to the existing invitation/reactivation patterns:
+
+    GET /users/mfa-recovery/{token}
+    -> a minimal preview (name/organization if appropriate, expiry), without sensitive
+       account or factor details
+
+    POST /users/mfa-recovery/{token}/accept
+    Body: { "current_password": "..." }
+    -> { "enrollment_token": "..." }
+
+- Acceptance must require the target user's existing password. Use timing-safe password
+  verification and the normal lockout/security behavior where applicable. An email link
+  alone must never reset MFA.
+- Successful acceptance must atomically consume the reset token, delete/invalidate every
+  prior MFA factor and recovery code, revoke sessions/tokens/challenges again, and issue
+  a short-lived enrollment token restricted to enrolling a new strong factor. The user
+  must not receive a normal session until the next normal password + MFA login.
+- Audit request, rejection, mail outcome, preview abuse where appropriate, failed password
+  confirmation, token expiry/replay, reset acceptance, factor enrollment, and subsequent
+  login. Metadata should include actor/target/reason/method/outcome but no secrets.
+- Send security notifications when a reset is requested and completed. Reuse the email
+  template system and provide both HTML and plain-text templates.
+- Apply strict endpoint rate limits and generic public errors that do not expose whether
+  a user/token/account exists beyond what a valid token legitimately reveals.
+
+Sole-administrator support runbook:
+
+- Add a human-operated runbook for the case where the tenant's only administrator cannot
+  authenticate and no other users possess users:mfa_reset.
+- Require documented identity and organization-authority verification, a support ticket,
+  two-person approval, exact tenant/user resolution, a database backup/recovery point,
+  an expiring recovery action, and post-action review.
+- Prefer invoking the same application/service semantics through a narrowly scoped
+  operational command if the repository already has an appropriate command framework.
+  Otherwise document an explicit transaction-based support procedure. Never suggest
+  changing a password hash to a known password or directly inserting a trusted MFA
+  credential.
+- The procedure must revoke sessions, invalidate old factors/recovery codes, produce an
+  attributable audit record, require normal strong-factor reenrollment, and notify the
+  account owner. Do not create a permanent support backdoor.
+
+FRONTEND REQUIREMENTS
+=====================
+
+Work in ../nodus-fe and update its API types, API modules, auth context/state, router,
+pages, tests, contract copy, and README as required.
+
+1. Login MFA page
+-----------------
+
+- Make the screen method-aware using mfa_methods returned after password verification.
+- Present available methods using clear user language:
+  - "Authenticator app"
+  - "Passkey or security key"
+  - "Recovery code"
+- Default to an available strong method, preferably WebAuthn when the browser supports it
+  and a credential is enrolled; otherwise TOTP. Do not automatically invoke a WebAuthn
+  prompt before a deliberate user action.
+- TOTP input accepts exactly six digits and may retain safe auto-submit. Set appropriate
+  inputMode/autocomplete attributes.
+- Recovery-code input accepts the actual generated format, preserves letters/separators,
+  and does not auto-submit prematurely. Explain that each code works once.
+- WebAuthn login obtains server options, decodes base64url binary fields, calls
+  navigator.credentials.get(), serializes the complete assertion response, and submits
+  it to the verification endpoint. Do not send only rawId.
+- Handle browser cancellation separately from unsupported browser, network failure,
+  expired password challenge, invalid/replayed ceremony, unknown credential, and server
+  rejection. Keep errors useful without exposing sensitive details.
+- If WebAuthn is unavailable on the current browser, keep TOTP/recovery options usable.
+- Preserve remember-me and original-destination behavior through every successful method.
+- Never persist or log challenges, assertions, TOTP values, recovery codes, or tokens.
+
+2. WebAuthn registration page
+-----------------------------
+
+- Replace BiometricSetupPage, /biometric-setup, biometric API methods, and misleading
+  fingerprint-only copy with a passkey/security-key registration flow and route.
+- Obtain creation options from the backend before calling navigator.credentials.create().
+  Decode all binary members correctly, including challenge, user.id, and excludeCredential
+  IDs. Serialize the complete attestation response, client extension results, transports,
+  and authenticator attachment fields required by the server/library. Do not invent a
+  client-side challenge.
+- Let users choose any available platform passkey or roaming security key through the
+  browser's native prompt. Use neutral key/device iconography and copy; a passkey may use
+  biometrics, a PIN, or another local verification method.
+- Require a recognizable credential name. For an established account, collect the
+  current password as required by registration options. Enrollment-token flows should
+  not ask for it again.
+- Support invitation onboarding, organization activation, account reactivation, MFA-reset
+  reenrollment, and adding another factor from My Account.
+- On first-factor enrollment, show the newly generated recovery codes exactly once and
+  require explicit acknowledgement that the user saved them before completing the flow.
+  Offer copy and text-file download without analytics/logging.
+- Handle unsupported browsers, insecure context, cancellation, duplicate credentials,
+  expired ceremonies, and server errors without incorrectly claiming registration
+  succeeded.
+
+3. Authenticator enrollment
+----------------------------
+
+- Preserve QR/manual-secret setup and TOTP confirmation, but align it with the revised
+  recovery-code lifecycle: do not display recovery codes before factor confirmation.
+- For first-factor enrollment, show codes returned only after successful confirmation,
+  then require acknowledgement before finishing onboarding.
+- For adding TOTP to an established account, do not regenerate recovery codes. If TOTP
+  already exists, disable/hide the add action and explain that only one authenticator-app
+  factor is supported.
+- Ensure failed/cancelled setup does not appear in My Account as an active method.
+
+4. My Account -> Security review
+--------------------------------
+
+Redesign/revise the existing Two-factor authentication section rather than only swapping
+a button label.
+
+- Separate the UI into:
+  A. "Sign-in methods" containing confirmed strong factors.
+  B. "Recovery codes" containing status and regeneration controls.
+- Display one authenticator-app row when enrolled and one row per named passkey/security
+  key. Show a neutral type icon, user-provided label, and added date. Do not expose
+  credential IDs, public keys, or counters.
+- Replace "Add biometric" with "Add passkey or security key." Keep this action available
+  because multiple WebAuthn credentials are allowed.
+- Show "Add authenticator app" only when no confirmed TOTP factor exists. Clearly explain
+  that adding multiple security keys is useful for resilience.
+- Disable removing the last strong factor and explain why. Removal must use a confirmation
+  modal, collect the current password, show the specific factor name, submit the revised
+  secure removal request, refresh server state, and show success/failure notifications.
+- The recovery-code card shows the remaining unused count. It must not display existing
+  codes. A "Generate new codes"/"Replace recovery codes" action must warn that all old
+  codes become invalid, request current-password confirmation, then show the returned
+  replacement set once with copy/download and saved-code acknowledgement.
+- Use "two-factor authentication" for the feature and "sign-in method" or "security key"
+  for factors. Do not call all WebAuthn credentials biometrics.
+- Include loading, empty, retry, unavailable-browser, no-recovery-codes, and partial-error
+  states. The API remains authoritative; UI permission/disabled states are not security
+  controls.
+- Refresh factor and recovery-code status on return from enrollment and after mutations.
+
+5. Administrator reset UI
+-------------------------
+
+- Add "Reset two-factor authentication" to the appropriate user action menu/details only
+  when the current user has users:mfa_reset, the target is eligible, and the target is not
+  the current user. Backend authorization remains authoritative.
+- Use a warning modal explaining that active sessions will be revoked, existing factors
+  and recovery codes will be replaced only after the user confirms recovery, and the user
+  must reenroll. Require a non-empty operational reason.
+- On success, say that a short-lived recovery link was sent to the user's registered
+  email. Do not display the link/token to the administrator.
+- Add a public recovery page that previews a valid token, requests the user's current
+  password, accepts the reset, stores the returned enrollment token only in the existing
+  in-memory onboarding mechanism, and routes to a choose-your-MFA enrollment screen.
+- The enrollment choice must offer authenticator app or passkey/security key. After one
+  is verified and recovery codes are saved, clear all recovery state and return to normal
+  login with an accurate success message.
+- Handle expired, already-used, invalid, and rate-limited links without account enumeration.
+
+DATA, TRANSACTION, AND SECURITY REQUIREMENTS
+===========================================
+
+- Every new tenant-scoped table must have tenant_id, a tenant foreign key, forced RLS,
+  the repository's tenant-isolation policy and tenant-stamping trigger, and tests proving
+  cross-tenant access is impossible.
+- All tokens/challenges are random, hashed at rest, single-use, purpose-specific, and
+  time-limited. Use existing security helpers unless they are insufficient.
+- Do not put secrets or raw tokens into audit metadata, application logs, URLs other than
+  the necessary emailed one-time recovery URL, frontend persistent storage, test snapshots,
+  or analytics.
+- Perform multi-record credential transitions in database transactions. Use conditional
+  updates/row locks to prevent double consumption and time-of-check/time-of-use races.
+- Maintain generic authentication errors and existing anti-enumeration behavior.
+- Preserve password reset semantics: password reset alone must never bypass MFA or delete
+  factors. MFA reset is the separate, explicitly authorized process described above.
+- Revocation must cover sessions, refresh tokens, outstanding login challenges, relevant
+  reset/enrollment tokens, and WebAuthn ceremonies where specified.
+- Add cleanup/expiry handling for persisted WebAuthn ceremonies and MFA reset tokens,
+  either through bounded queries/on-use cleanup or the project's established cleanup job.
+- Validate all labels, reasons, codes, tokens, and WebAuthn payload sizes to prevent
+  unbounded storage or request abuse.
+- Keep API responses in the existing response envelope and map domain errors to stable,
+  documented HTTP statuses.
+
+DOCUMENTATION REQUIREMENTS
+==========================
+
+1. OpenAPI contract
+-------------------
+
+- Update the canonical backend file:
+  /home/berylatieno/workspace/nodus/nodus-be/auth-api-contract.yaml
+- Synchronize it byte-for-byte to:
+  /home/berylatieno/workspace/nodus/nodus-be/static/docs/auth-api-contract.yaml
+- Synchronize the frontend copy used by the application repository:
+  /home/berylatieno/workspace/nodus/nodus-fe/auth-api-contract.yaml
+- Document all new/changed endpoints, auth requirements, permissions, request/response
+  schemas, MFA method enums, errors, expiries, single-use behavior, and examples that do
+  not contain real secrets.
+- Remove biometric schemas/endpoints and clearly distinguish WebAuthn credentials from
+  recovery codes.
+
+2. Developer/operator documentation
+-----------------------------------
+
+- Update the frontend README's authentication/session section with the completed MFA
+  methods, WebAuthn browser/HTTPS requirements, recovery-code behavior, and frontend
+  route/module overview.
+- Add or update backend documentation describing WebAuthn configuration variables,
+  allowed-origin formatting, RP ID rules, development defaults, migration order, and
+  recovery/reset token TTL configuration.
+- Update .env.example/config documentation for every new required setting without adding
+  production secrets or insecure defaults.
+- Update static/docs/README.md if needed so canonical/published contract synchronization
+  remains explicit.
+- Add static/docs/mfa-recovery-runbook.md (or the repository's established equivalent)
+  covering normal admin-assisted reset, sole-admin support recovery, identity checks,
+  approvals, audit evidence, notifications, incident handling, and rollback limitations.
+- Document the legacy-biometric preflight query, expected affected-user handling, rollout
+  order, and the fact that deleted legacy credentials cannot be restored by a down
+  migration.
+- Include a short security rationale: email/SMS OTP are intentionally not authentication
+  methods because they create a weaker downgrade path; email is notification and delivery
+  infrastructure only.
+- Reference applicable DHA-oriented controls carefully without claiming that code alone
+  guarantees certification. Describe MFA, least privilege, audit trails, privacy, and
+  operational controls as supporting evidence for assessment.
+
+TEST REQUIREMENTS
+=================
+
+Backend tests
+-------------
+
+Add or update unit/integration tests for at least:
+
+- Login advertises recovery_code only after password validation and only with unused codes.
+- TOTP accepts only valid TOTP and no longer accepts recovery codes.
+- Recovery code succeeds once, fails on replay, is not consumed on rolled-back session
+  creation, and cannot succeed twice concurrently.
+- Recovery code failures trigger normal failed-attempt/lockout behavior without leaking
+  whether a particular code exists.
+- Initial TOTP and WebAuthn enrollment generate recovery codes only after factor success.
+- Regeneration requires a valid session and current password, invalidates all prior codes,
+  returns new codes once, records safe audit events, and is tenant-isolated.
+- TOTP duplicate/pending setup behavior and one-confirmed-TOTP invariant.
+- WebAuthn registration and authentication happy paths using library-compatible fixtures.
+- WebAuthn rejects wrong origin/RP ID/challenge/user/credential, expired or replayed
+  ceremonies, missing user verification, invalid signatures, and cross-tenant credentials.
+- Sign counters/clone warnings follow the documented policy.
+- Platform and roaming credential metadata are accepted where protocol-valid.
+- Removal requires password, refuses the last strong factor, and does not alter unrelated
+  recovery codes/factors.
+- Admin reset permission, self-reset refusal, ineligible accounts, required reason,
+  session/challenge revocation, token hashing/expiry/single-use, mail handling, password
+  confirmation, factor/code invalidation, enrollment-token scope, and audit metadata.
+- Public reset endpoints resist enumeration and token replay.
+- RLS tests cover every new table and tenant-bound query.
+- Legacy migration behavior is tested with TOTP-only, biometric-only, and mixed-factor
+  users, including stated rollback limitations.
+
+Frontend tests
+--------------
+
+Add/update Vitest and Testing Library coverage for at least:
+
+- TOTP login input and successful remember-me/navigation behavior.
+- Recovery-code selection, non-digit input, submission, errors, and one-time explanation.
+- WebAuthn options decoding, complete credential serialization, registration/assertion
+  submission, cancellation, unsupported browser, and expired ceremony/challenge states.
+- No client-generated WebAuthn challenge and no raw-ID-only registration/assertion.
+- Initial enrollment via either TOTP or WebAuthn, recovery-code one-time display,
+  copy/download behavior, acknowledgement, and cleanup of onboarding state.
+- My Account factor rendering, one-TOTP/multiple-WebAuthn actions, last-factor guard,
+  password-confirmed removal, status retry, regeneration warning/password flow, and
+  old-code invalidation messaging.
+- Admin action permission visibility, self/eligibility restrictions, reason validation,
+  successful request, and API failures.
+- Public MFA recovery preview/accept/expiry/replay handling and routing into reenrollment.
+- Removal of old biometric labels, routes, helpers, and contract types.
+
+Verification commands
+---------------------
+
+Run the exact repository-supported equivalents of:
+
+Backend:
+
+  gofmt on changed Go files
+  sqlc generate (when SQL queries/schema-driven generated code changes)
+  go test ./...
+
+Frontend:
+
+  npm test -- --run
+  npm run lint
+  npm run build
+
+Also:
+
+- Validate the OpenAPI YAML.
+- Compare the three contract copies and leave them synchronized.
+- Inspect git diff/status in both repositories and ensure generated build output,
+  credentials, local environment files, and unrelated changes are not committed/edited.
+- If a command cannot run because the environment lacks a service or dependency, report
+  that precisely and still run all unaffected checks.
+
+ACCEPTANCE CRITERIA
+===================
+
+The work is complete only when all of the following are true:
+
+- A user can complete password + TOTP login.
+- A user can complete password + real WebAuthn passkey/security-key login.
+- A user with neither available can deliberately choose and consume one offline recovery
+  code, after which that code cannot be reused.
+- There is no email/SMS OTP or email-only authentication bypass.
+- My Account accurately displays and manages TOTP, multiple passkeys/security keys, and
+  recovery-code status, with current-password confirmation for sensitive mutations.
+- New users and reactivated/recovered users can enroll either TOTP or WebAuthn, save their
+  recovery codes once, and then log in normally.
+- An authorized administrator can initiate a non-self MFA reset with a reason; the target
+  must possess the email link and know the current password, then reenroll before login.
+- Legacy custom biometric credentials are invalidated and no custom Ed25519 authentication
+  path remains.
+- Last-factor, replay, concurrency, expiry, origin/RP, session-revocation, tenant/RLS,
+  permission, rate-limit, notification, and audit requirements are enforced server-side.
+- Backend tests pass, frontend tests/lint/build pass, and documentation/contracts describe
+  the behavior actually implemented.
+
+FINAL HANDOFF
+=============
+
+At completion, provide a concise report containing:
+
+- The implemented user-visible behavior.
+- Backend API and migration changes.
+- Frontend login, onboarding, My Account, and admin changes.
+- Security decisions and intentionally excluded methods.
+- Documentation added/updated.
+- Tests and commands run with results.
+- The legacy-biometric preflight/rollout steps and any affected-user action required.
+- Any residual risk or environmental verification that remains; do not label incomplete
+  or untested work as complete.

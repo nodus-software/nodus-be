@@ -11,16 +11,19 @@ func TestLogout_RevokesSessionAndAccessToken(t *testing.T) {
 	env := Setup(t)
 	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
 	secret := env.EnrollTOTP(t, userID)
-	accessToken, _ := env.CompleteLogin(t, "jdoe@example.com", "Sup3rSecret!Pass", secret)
+	accessToken, refreshToken := env.CompleteLogin(t, "jdoe@example.com", "Sup3rSecret!Pass", secret)
 
 	meBefore := env.JSON(t, http.MethodGet, "/auth/me", accessToken, nil)
 	if meBefore.Code != http.StatusOK {
 		t.Fatalf("expected /auth/me to work before logout, got %d: %s", meBefore.Code, meBefore.Body.String())
 	}
 
-	logoutRec := env.JSON(t, http.MethodPost, "/auth/logout", accessToken, nil)
+	logoutRec := env.JSONWithCookie(t, http.MethodPost, "/auth/logout", accessToken, nil, &http.Cookie{Name: "nodus_refresh", Value: refreshToken})
 	if logoutRec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", logoutRec.Code, logoutRec.Body.String())
+	}
+	if cookies := logoutRec.Result().Cookies(); len(cookies) != 1 || cookies[0].MaxAge != -1 {
+		t.Fatalf("expected logout to clear refresh cookie, got %#v", cookies)
 	}
 
 	meAfter := env.JSON(t, http.MethodGet, "/auth/me", accessToken, nil)
