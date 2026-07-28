@@ -35,11 +35,9 @@ func main() {
 		fatal(fmt.Errorf("create preview directory: %w", err))
 	}
 
-	logoURL := copyFrontendLogo(repoRoot, outputDir)
 	renderer := email.NewRenderer(email.CommonData{
 		AppName:      "Nodus Health",
 		AppURL:       "https://nodus.example.test",
-		LogoURL:      logoURL,
 		SupportEmail: "support@nodushealth.example",
 		SupportURL:   "https://nodus.example.test/support",
 		PrivacyURL:   "https://nodus.example.test/privacy",
@@ -122,25 +120,6 @@ func writePreview(outputDir, name string, rendered email.Rendered) error {
 		return fmt.Errorf("write %s text preview: %w", name, err)
 	}
 	return nil
-}
-
-func copyFrontendLogo(repoRoot, outputDir string) string {
-	source := filepath.Clean(filepath.Join(repoRoot, "..", "nodus-fe", "src", "assets", "branding", "full-logo.png"))
-	data, err := os.ReadFile(source)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: frontend logo unavailable (%v); using text branding\n", err)
-		return ""
-	}
-	assetsDir := filepath.Join(outputDir, "assets")
-	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot create preview assets directory (%v); using text branding\n", err)
-		return ""
-	}
-	if err := os.WriteFile(filepath.Join(assetsDir, "full-logo.png"), data, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot copy frontend logo (%v); using text branding\n", err)
-		return ""
-	}
-	return "assets/full-logo.png"
 }
 
 func findRepoRoot() (string, error) {

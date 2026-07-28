@@ -3,6 +3,7 @@ package email
 import (
 	"bytes"
 	"embed"
+	"encoding/base64"
 	"fmt"
 	"html/template"
 	"path/filepath"
@@ -13,6 +14,14 @@ import (
 
 //go:embed templates/**/*.tmpl
 var templateFiles embed.FS
+
+//go:embed templates/assets/logo.png
+var logoPNG []byte
+
+// defaultLogoDataURI embeds the nodus+ health full-color logo directly into
+// outgoing emails so branding renders reliably without depending on a
+// publicly hosted asset URL.
+var defaultLogoDataURI = "data:image/png;base64," + base64.StdEncoding.EncodeToString(logoPNG)
 
 type Kind string
 
@@ -74,6 +83,9 @@ func NewRenderer(defaults CommonData) *Renderer {
 	}
 	if defaults.CurrentYear == 0 {
 		defaults.CurrentYear = time.Now().Year()
+	}
+	if defaults.LogoURL == "" {
+		defaults.LogoURL = defaultLogoDataURI
 	}
 	return &Renderer{defaults: defaults}
 }
@@ -137,7 +149,14 @@ func (r *Renderer) withDefaults(data CommonData) CommonData {
 }
 
 func (r *Renderer) render(kind Kind, subject string, data any) (Rendered, error) {
-	funcs := template.FuncMap{"formatTime": formatTime}
+	funcs := template.FuncMap{
+		"formatTime": formatTime,
+		// LogoURL is server-controlled branding (a config value or the embedded
+		// data: URI below), never end-user input, so it's safe to mark as a
+		// trusted URL. Without this, html/template's URL sanitizer strips
+		// data: URIs and replaces the src with "#ZgotmplZ".
+		"safeURL": func(s string) template.URL { return template.URL(s) },
+	}
 	htmlFiles := []string{
 		"templates/layouts/base.html.tmpl",
 		"templates/partials/header.html.tmpl",
