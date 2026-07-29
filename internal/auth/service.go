@@ -2,13 +2,15 @@ package auth
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
+	wa "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
 	"nodus-health/internal/audit"
@@ -50,9 +52,13 @@ type Config struct {
 
 	BcryptCost int
 
-	TOTPIssuer         string
-	MFABackupCodeCount int
-	MFAEncryptionKey   [32]byte
+	TOTPIssuer            string
+	MFABackupCodeCount    int
+	MFAEncryptionKey      [32]byte
+	WebAuthnRPDisplayName string
+	WebAuthnRPID          string
+	WebAuthnOrigins       []string
+	WebAuthnCeremonyTTL   time.Duration
 
 	LockoutMaxAttempts int
 	LockoutDuration    time.Duration
@@ -64,21 +70,50 @@ type Config struct {
 }
 
 type Service struct {
-	repo   Repository
-	audit  AuditRecorder
-	mailer Mailer
-	log    *logger.Logger
-	cfg    Config
+	repo        Repository
+	audit       AuditRecorder
+	mailer      Mailer
+	log         *logger.Logger
+	cfg         Config
+	webauthn    *wa.WebAuthn
+	webauthnErr error
 }
 
 func NewService(repo Repository, audit AuditRecorder, mailer Mailer, log *logger.Logger, cfg Config) *Service {
-	return &Service{repo: repo, audit: audit, mailer: mailer, log: log, cfg: cfg}
+	if cfg.WebAuthnRPDisplayName == "" {
+		cfg.WebAuthnRPDisplayName = "Nodus Health"
+	}
+	if cfg.WebAuthnRPID == "" {
+		cfg.WebAuthnRPID = "localhost"
+	}
+	if len(cfg.WebAuthnOrigins) == 0 {
+		cfg.WebAuthnOrigins = []string{"http://localhost:5173"}
+	}
+	if cfg.WebAuthnCeremonyTTL <= 0 {
+		cfg.WebAuthnCeremonyTTL = 5 * time.Minute
+	}
+	w, werr := wa.New(&wa.Config{RPDisplayName: cfg.WebAuthnRPDisplayName, RPID: cfg.WebAuthnRPID, RPOrigins: cfg.WebAuthnOrigins, AttestationPreference: protocol.PreferNoAttestation, AuthenticatorSelection: protocol.AuthenticatorSelection{ResidentKey: protocol.ResidentKeyRequirementPreferred, UserVerification: protocol.VerificationRequired}})
+	return &Service{repo: repo, audit: audit, mailer: mailer, log: log, cfg: cfg, webauthn: w, webauthnErr: werr}
 }
 
 // dummyPasswordHash is compared against on a not-found username so that
 // login timing is indistinguishable from a real user with a wrong password,
 // mitigating username enumeration via response-time side channel.
 var dummyPasswordHash, _ = security.HashPassword("nodus-health-dummy-timing-guard", 10)
+
+// validateTOTP permits one 30-second interval of clock/network drift on each
+// side of the current interval. This is the narrow interoperability window
+// recommended for human-entered TOTP and still participates in normal
+// failed-attempt lockout handling.
+func validateTOTP(code, secret string, now time.Time) bool {
+	valid, err := totp.ValidateCustom(code, secret, now, totp.ValidateOpts{
+		Period:    30,
+		Skew:      1,
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	return err == nil && valid
+}
 
 func ptr(s string) *string { return &s }
 
@@ -115,6 +150,11 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip string) (*Logi
 		return nil, err
 	}
 	methods := confirmedFactorMethods(factors)
+	if remaining, countErr := s.repo.CountUnusedMFABackupCodes(ctx, user.ID); countErr != nil {
+		return nil, countErr
+	} else if remaining > 0 {
+		methods = append(methods, "recovery_code")
+	}
 	if len(methods) == 0 {
 		s.recordLoginFailure(ctx, &user.ID, ip, "mfa_not_enrolled")
 		return nil, ErrMFANotEnrolled
@@ -209,8 +249,15 @@ func (s *Service) VerifyMFA(ctx context.Context, req VerifyMFARequest, ip, userA
 		return nil, s.handleFailedAttempt(ctx, user, ip, "mfa_code_invalid")
 	}
 
-	pair, err := s.establishSession(ctx, user, challenge, ip, userAgent, deviceLabel, req.RememberMe, now)
+	var recoveryHash string
+	if req.Method == "recovery_code" {
+		recoveryHash = security.HashToken(security.NormalizeRecoveryCode(req.Code))
+	}
+	pair, err := s.establishSession(ctx, user, challenge, ip, userAgent, deviceLabel, req.RememberMe, recoveryHash, now)
 	if err != nil {
+		if errors.Is(err, ErrMFACodeInvalid) {
+			return nil, s.handleFailedAttempt(ctx, user, ip, "mfa_code_invalid")
+		}
 		return nil, err
 	}
 
@@ -221,6 +268,17 @@ func (s *Service) VerifyMFA(ctx context.Context, req VerifyMFARequest, ip, userA
 }
 
 func (s *Service) verifyMFACode(ctx context.Context, user *User, req VerifyMFARequest) (bool, error) {
+	if req.Method == "recovery_code" {
+		canonical := security.NormalizeRecoveryCode(req.Code)
+		if len(canonical) != 16 {
+			return false, nil
+		}
+		codeID, err := s.repo.GetUnusedMFABackupCodeIDByHash(ctx, user.ID, security.HashToken(canonical))
+		return codeID != "", err
+	}
+	if req.Method != string(MFAFactorTOTP) || !regexp.MustCompile(`^[0-9]{6}$`).MatchString(req.Code) {
+		return false, nil
+	}
 	factors, err := s.repo.ListMFAFactorsByUser(ctx, user.ID)
 	if err != nil {
 		return false, err
@@ -236,32 +294,27 @@ func (s *Service) verifyMFACode(ctx context.Context, user *User, req VerifyMFARe
 			if err != nil {
 				return false, err
 			}
-			if totp.Validate(req.Code, secret) {
+			if validateTOTP(req.Code, secret, time.Now()) {
 				return true, nil
 			}
-		case MFAFactorBiometric:
-			if verifyBiometricAssertion(*f.PublicKey, req.ChallengeToken, req.Code) {
-				return true, nil
-			}
-		}
-	}
-
-	if req.Method == string(MFAFactorTOTP) {
-		codeID, err := s.repo.GetUnusedMFABackupCodeIDByHash(ctx, user.ID, security.HashToken(req.Code))
-		if err == nil && codeID != "" {
-			if err := s.repo.ConsumeMFABackupCode(ctx, codeID); err != nil {
-				return false, err
-			}
-			return true, nil
 		}
 	}
 
 	return false, nil
 }
 
-func (s *Service) establishSession(ctx context.Context, user *User, challenge *LoginChallenge, ip, userAgent, deviceLabel string, rememberMe bool, now time.Time) (*TokenPairResponse, error) {
+func (s *Service) establishSession(ctx context.Context, user *User, challenge *LoginChallenge, ip, userAgent, deviceLabel string, rememberMe bool, recoveryHash string, now time.Time) (*TokenPairResponse, error) {
 	var pair *TokenPairResponse
 	err := s.repo.WithinTx(ctx, func(repo Repository) error {
+		if recoveryHash != "" {
+			codeID, err := repo.GetUnusedMFABackupCodeIDByHash(ctx, user.ID, recoveryHash)
+			if err != nil || codeID == "" {
+				return ErrMFACodeInvalid
+			}
+			if err := repo.ConsumeMFABackupCode(ctx, codeID); err != nil {
+				return err
+			}
+		}
 		if err := repo.ConsumeLoginChallenge(ctx, challenge.ID); err != nil {
 			return err
 		}
@@ -313,23 +366,6 @@ func (s *Service) establishSession(ctx context.Context, user *User, challenge *L
 		return nil
 	})
 	return pair, err
-}
-
-// verifyBiometricAssertion checks an Ed25519 signature over the challenge
-// token using the registered device public key. This proves possession of
-// the private key that produced the registered public key, but — unlike a
-// full WebAuthn ceremony — does not bind to an RP ID/origin or verify
-// attestation. See the biometric MFA caveat in the project plan.
-func verifyBiometricAssertion(publicKeyB64, challengeToken, signatureB64 string) bool {
-	pubKey, err := base64.StdEncoding.DecodeString(publicKeyB64)
-	if err != nil || len(pubKey) != ed25519.PublicKeySize {
-		return false
-	}
-	sig, err := base64.StdEncoding.DecodeString(signatureB64)
-	if err != nil {
-		return false
-	}
-	return ed25519.Verify(pubKey, []byte(challengeToken), sig)
 }
 
 // Refresh exchanges a valid refresh token for a new access/refresh pair,
@@ -461,12 +497,21 @@ func (s *Service) Me(ctx context.Context, userID string) (*UserProfileResponse, 
 	}, nil
 }
 
-// SetupTOTP begins TOTP enrollment: generates a secret, stores it encrypted
-// as an unconfirmed factor, and returns one-time backup codes.
+// SetupTOTP begins enrollment. Recovery credentials are intentionally not
+// created until the factor has been cryptographically confirmed.
 func (s *Service) SetupTOTP(ctx context.Context, userID string) (*TOTPSetupResponse, error) {
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, err
+	}
+	factors, err := s.repo.ListMFAFactorsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, factor := range factors {
+		if factor.Type == MFAFactorTOTP && factor.IsConfirmed() {
+			return nil, ErrTOTPAlreadyEnrolled
+		}
 	}
 
 	key, err := totp.Generate(totp.GenerateOpts{Issuer: s.cfg.TOTPIssuer, AccountName: user.Username})
@@ -483,30 +528,18 @@ func (s *Service) SetupTOTP(ctx context.Context, userID string) (*TOTPSetupRespo
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.repo.CreateMFAFactor(ctx, MFAFactor{
-		ID: factorID, UserID: userID, Type: MFAFactorTOTP, Label: "Authenticator App",
-		SecretEncrypted: &encryptedSecret,
-	}); err != nil {
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if err := repo.DeletePendingTOTPFactors(ctx, userID); err != nil {
+			return err
+		}
+		_, err := repo.CreateMFAFactor(ctx, MFAFactor{ID: factorID, UserID: userID, Type: MFAFactorTOTP, Label: "Authenticator App", SecretEncrypted: &encryptedSecret})
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
 
-	backupCodes := make([]string, 0, s.cfg.MFABackupCodeCount)
-	for range s.cfg.MFABackupCodeCount {
-		raw, err := security.GenerateBackupCode()
-		if err != nil {
-			return nil, err
-		}
-		codeID, err := utility.GenerateUUID()
-		if err != nil {
-			return nil, err
-		}
-		if err := s.repo.CreateMFABackupCode(ctx, codeID, userID, security.HashToken(raw)); err != nil {
-			return nil, err
-		}
-		backupCodes = append(backupCodes, raw)
-	}
-
-	return &TOTPSetupResponse{Secret: key.Secret(), QRCodeURI: key.URL(), BackupCodes: backupCodes}, nil
+	return &TOTPSetupResponse{Secret: key.Secret(), QRCodeURI: key.URL()}, nil
 }
 
 func (s *Service) ResolveEnrollmentToken(ctx context.Context, rawToken string) (string, string, error) {
@@ -522,10 +555,10 @@ func (s *Service) ConsumeEnrollmentToken(ctx context.Context, id string) error {
 }
 
 // ConfirmTOTP verifies the initial code and activates the pending factor.
-func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) error {
+func (s *Service) ConfirmTOTP(ctx context.Context, userID, code, enrollmentTokenID string) (*ConfirmTOTPResponse, error) {
 	factors, err := s.repo.ListMFAFactorsByUser(ctx, userID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var pending *MFAFactor
@@ -536,36 +569,48 @@ func (s *Service) ConfirmTOTP(ctx context.Context, userID, code string) error {
 		}
 	}
 	if pending == nil {
-		return ErrFactorNotFound
+		return nil, ErrFactorNotFound
 	}
 
 	secret, err := security.DecryptString(s.cfg.MFAEncryptionKey, *pending.SecretEncrypted)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !totp.Validate(code, secret) {
-		return ErrMFACodeInvalid
+	if !validateTOTP(code, secret, time.Now()) {
+		return nil, ErrMFACodeInvalid
 	}
-	return s.repo.ConfirmMFAFactor(ctx, pending.ID)
-}
-
-// RegisterBiometric stores a device public key as an immediately-active
-// secondary MFA factor (no separate confirm step, per the contract).
-func (s *Service) RegisterBiometric(ctx context.Context, userID string, req RegisterBiometricRequest) (*MFAFactor, error) {
-	pubKey, err := base64.StdEncoding.DecodeString(req.DevicePublicKey)
-	if err != nil || len(pubKey) != ed25519.PublicKeySize {
-		return nil, ErrInvalidPublicKey
-	}
-
-	factorID, err := utility.GenerateUUID()
+	remaining, err := s.repo.CountUnusedMFABackupCodes(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	return s.repo.CreateMFAFactor(ctx, MFAFactor{
-		ID: factorID, UserID: userID, Type: MFAFactorBiometric,
-		Label: req.DeviceLabel, PublicKey: ptr(req.DevicePublicKey), ConfirmedAt: &now,
+	response := &ConfirmTOTPResponse{Status: "enabled"}
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if err := repo.ConfirmMFAFactor(ctx, pending.ID); err != nil {
+			return err
+		}
+		if remaining == 0 {
+			for range s.cfg.MFABackupCodeCount {
+				raw, err := security.GenerateBackupCode()
+				if err != nil {
+					return err
+				}
+				id, err := utility.GenerateUUID()
+				if err != nil {
+					return err
+				}
+				canonical := security.NormalizeRecoveryCode(raw)
+				if err := repo.CreateMFABackupCode(ctx, id, userID, security.HashToken(canonical)); err != nil {
+					return err
+				}
+				response.RecoveryCodes = append(response.RecoveryCodes, raw)
+			}
+		}
+		if enrollmentTokenID != "" {
+			return repo.ConsumeEnrollmentToken(ctx, enrollmentTokenID)
+		}
+		return nil
 	})
+	return response, err
 }
 
 // ListFactors returns every enrolled MFA factor (confirmed or pending) for
@@ -577,6 +622,9 @@ func (s *Service) ListFactors(ctx context.Context, userID string) ([]MFAFactorRe
 	}
 	resp := make([]MFAFactorResponse, 0, len(factors))
 	for _, f := range factors {
+		if !f.IsConfirmed() {
+			continue
+		}
 		resp = append(resp, MFAFactorResponse{ID: f.ID, Type: string(f.Type), Label: f.Label, CreatedAt: f.CreatedAt})
 	}
 	return resp, nil
@@ -584,7 +632,14 @@ func (s *Service) ListFactors(ctx context.Context, userID string) ([]MFAFactorRe
 
 // RemoveFactor deletes an MFA factor, refusing to remove the last confirmed
 // factor a user has.
-func (s *Service) RemoveFactor(ctx context.Context, userID, factorID string) error {
+func (s *Service) RemoveFactor(ctx context.Context, userID, factorID, currentPassword string) error {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !security.ComparePassword(user.PasswordHash, currentPassword) {
+		return ErrCurrentPasswordInvalid
+	}
 	factor, err := s.repo.GetMFAFactorByID(ctx, factorID)
 	if err != nil {
 		if errors.Is(err, ErrFactorNotFound) {
@@ -605,7 +660,63 @@ func (s *Service) RemoveFactor(ctx context.Context, userID, factorID string) err
 			return ErrLastFactorRemaining
 		}
 	}
-	return s.repo.DeleteMFAFactor(ctx, factorID)
+	return s.repo.WithinTx(ctx, func(repo Repository) error {
+		count, err := repo.CountConfirmedMFAFactors(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if factor.IsConfirmed() && count <= 1 {
+			return ErrLastFactorRemaining
+		}
+		return repo.DeleteMFAFactor(ctx, factorID)
+	})
+}
+
+func (s *Service) RecoveryCodeStatus(ctx context.Context, userID string) (*RecoveryCodeStatusResponse, error) {
+	n, err := s.repo.CountUnusedMFABackupCodes(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &RecoveryCodeStatusResponse{Remaining: n, Generated: n > 0}, nil
+}
+
+func (s *Service) RegenerateRecoveryCodes(ctx context.Context, userID string, req RegenerateRecoveryCodesRequest) (*RecoveryCodesResponse, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !security.ComparePassword(user.PasswordHash, req.CurrentPassword) {
+		return nil, ErrCurrentPasswordInvalid
+	}
+	resp := &RecoveryCodesResponse{Remaining: s.cfg.MFABackupCodeCount}
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if err := repo.InvalidateMFABackupCodes(ctx, userID); err != nil {
+			return err
+		}
+		for range s.cfg.MFABackupCodeCount {
+			raw, err := security.GenerateBackupCode()
+			if err != nil {
+				return err
+			}
+			id, err := utility.GenerateUUID()
+			if err != nil {
+				return err
+			}
+			if err := repo.CreateMFABackupCode(ctx, id, userID, security.HashToken(security.NormalizeRecoveryCode(raw))); err != nil {
+				return err
+			}
+			resp.RecoveryCodes = append(resp.RecoveryCodes, raw)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.audit.Record(ctx, audit.Entry{UserID: &userID, Action: "mfa_recovery_codes_regenerated", Result: audit.ResultSuccess})
+	if err := s.mailer.Send(ctx, user.Email, "Your Nodus Health recovery codes were replaced", "Your MFA recovery codes were replaced. If this was not you, contact your administrator immediately."); err != nil {
+		s.log.Error("failed recovery-code notification", "error", err.Error())
+	}
+	return resp, nil
 }
 
 // ChangePassword verifies the current password, enforces the complexity

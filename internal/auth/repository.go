@@ -56,8 +56,17 @@ type Repository interface {
 	CreateMFABackupCode(ctx context.Context, id, userID, codeHash string) error
 	GetUnusedMFABackupCodeIDByHash(ctx context.Context, userID, codeHash string) (string, error)
 	ConsumeMFABackupCode(ctx context.Context, id string) error
+	CountUnusedMFABackupCodes(ctx context.Context, userID string) (int, error)
+	InvalidateMFABackupCodes(ctx context.Context, userID string) error
 	GetEnrollmentTokenByHash(ctx context.Context, tokenHash string) (id, userID string, expiresAt time.Time, consumed bool, err error)
 	ConsumeEnrollmentToken(ctx context.Context, id string) error
+	CreateWebAuthnCredential(ctx context.Context, credential WebAuthnCredential) error
+	ListWebAuthnCredentialsByUser(ctx context.Context, userID string) ([]WebAuthnCredential, error)
+	UpdateWebAuthnCredential(ctx context.Context, userID string, credentialID, credentialJSON []byte) error
+	CreateWebAuthnCeremony(ctx context.Context, ceremony WebAuthnCeremony) error
+	GetWebAuthnCeremonyByID(ctx context.Context, id string) (*WebAuthnCeremony, error)
+	ConsumeWebAuthnCeremony(ctx context.Context, id string) error
+	DeletePendingTOTPFactors(ctx context.Context, userID string) error
 
 	GetRolesByUser(ctx context.Context, userID string) ([]Role, error)
 	GetEffectivePermissionsByUser(ctx context.Context, userID string) ([]string, error)

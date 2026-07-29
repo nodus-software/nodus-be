@@ -31,12 +31,25 @@ func (q *Queries) ConsumeEnrollmentToken(ctx context.Context, id string) error {
 }
 
 const consumeMFABackupCode = `-- name: ConsumeMFABackupCode :exec
-UPDATE mfa_backup_codes SET used_at = now() WHERE id = $1
+UPDATE mfa_backup_codes SET used_at = now() WHERE id = $1 AND used_at IS NULL
 `
 
 func (q *Queries) ConsumeMFABackupCode(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, consumeMFABackupCode, id)
 	return err
+}
+
+const consumeWebAuthnCeremony = `-- name: ConsumeWebAuthnCeremony :execrows
+UPDATE webauthn_ceremonies SET consumed_at=now()
+WHERE id=$1 AND consumed_at IS NULL AND expires_at>now()
+`
+
+func (q *Queries) ConsumeWebAuthnCeremony(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, consumeWebAuthnCeremony, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const countConfirmedMFAFactors = `-- name: CountConfirmedMFAFactors :one
@@ -45,6 +58,17 @@ SELECT count(*) FROM mfa_factors WHERE user_id = $1 AND confirmed_at IS NOT NULL
 
 func (q *Queries) CountConfirmedMFAFactors(ctx context.Context, userID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countConfirmedMFAFactors, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnusedMFABackupCodes = `-- name: CountUnusedMFABackupCodes :one
+SELECT count(*) FROM mfa_backup_codes WHERE user_id=$1 AND used_at IS NULL
+`
+
+func (q *Queries) CountUnusedMFABackupCodes(ctx context.Context, userID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnusedMFABackupCodes, userID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -107,12 +131,75 @@ func (q *Queries) CreateMFAFactor(ctx context.Context, arg CreateMFAFactorParams
 	return i, err
 }
 
+const createWebAuthnCeremony = `-- name: CreateWebAuthnCeremony :exec
+INSERT INTO webauthn_ceremonies(id,user_id,login_challenge_id,enrollment_token_id,purpose,label,session_data,expires_at)
+VALUES($1,$2,$3,$4,$5,$6,$8::text::jsonb,$7)
+`
+
+type CreateWebAuthnCeremonyParams struct {
+	ID                string                  `json:"id"`
+	UserID            string                  `json:"user_id"`
+	LoginChallengeID  *string                 `json:"login_challenge_id"`
+	EnrollmentTokenID *string                 `json:"enrollment_token_id"`
+	Purpose           WebauthnCeremonyPurpose `json:"purpose"`
+	Label             string                  `json:"label"`
+	ExpiresAt         pgtype.Timestamptz      `json:"expires_at"`
+	SessionData       string                  `json:"session_data"`
+}
+
+func (q *Queries) CreateWebAuthnCeremony(ctx context.Context, arg CreateWebAuthnCeremonyParams) error {
+	_, err := q.db.Exec(ctx, createWebAuthnCeremony,
+		arg.ID,
+		arg.UserID,
+		arg.LoginChallengeID,
+		arg.EnrollmentTokenID,
+		arg.Purpose,
+		arg.Label,
+		arg.ExpiresAt,
+		arg.SessionData,
+	)
+	return err
+}
+
+const createWebAuthnCredential = `-- name: CreateWebAuthnCredential :exec
+INSERT INTO webauthn_credentials(id,user_id,factor_id,credential_id,credential)
+VALUES($1,$2,$3,$4,$5::text::jsonb)
+`
+
+type CreateWebAuthnCredentialParams struct {
+	ID           string `json:"id"`
+	UserID       string `json:"user_id"`
+	FactorID     string `json:"factor_id"`
+	CredentialID []byte `json:"credential_id"`
+	Credential   string `json:"credential"`
+}
+
+func (q *Queries) CreateWebAuthnCredential(ctx context.Context, arg CreateWebAuthnCredentialParams) error {
+	_, err := q.db.Exec(ctx, createWebAuthnCredential,
+		arg.ID,
+		arg.UserID,
+		arg.FactorID,
+		arg.CredentialID,
+		arg.Credential,
+	)
+	return err
+}
+
 const deleteMFAFactor = `-- name: DeleteMFAFactor :exec
 DELETE FROM mfa_factors WHERE id = $1
 `
 
 func (q *Queries) DeleteMFAFactor(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deleteMFAFactor, id)
+	return err
+}
+
+const deletePendingTOTPFactors = `-- name: DeletePendingTOTPFactors :exec
+DELETE FROM mfa_factors WHERE user_id=$1 AND type='totp' AND confirmed_at IS NULL
+`
+
+func (q *Queries) DeletePendingTOTPFactors(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, deletePendingTOTPFactors, userID)
 	return err
 }
 
@@ -186,6 +273,58 @@ func (q *Queries) GetUnusedMFABackupCodeByHash(ctx context.Context, arg GetUnuse
 	return i, err
 }
 
+const getWebAuthnCeremonyByID = `-- name: GetWebAuthnCeremonyByID :one
+SELECT id, tenant_id, user_id, login_challenge_id, enrollment_token_id, purpose, label, session_data, expires_at, consumed_at, created_at FROM webauthn_ceremonies WHERE id=$1
+`
+
+func (q *Queries) GetWebAuthnCeremonyByID(ctx context.Context, id string) (WebauthnCeremony, error) {
+	row := q.db.QueryRow(ctx, getWebAuthnCeremonyByID, id)
+	var i WebauthnCeremony
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.UserID,
+		&i.LoginChallengeID,
+		&i.EnrollmentTokenID,
+		&i.Purpose,
+		&i.Label,
+		&i.SessionData,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getWebAuthnCredentialByCredentialID = `-- name: GetWebAuthnCredentialByCredentialID :one
+SELECT id, tenant_id, user_id, factor_id, credential_id, credential, created_at, updated_at FROM webauthn_credentials WHERE credential_id=$1
+`
+
+func (q *Queries) GetWebAuthnCredentialByCredentialID(ctx context.Context, credentialID []byte) (WebauthnCredential, error) {
+	row := q.db.QueryRow(ctx, getWebAuthnCredentialByCredentialID, credentialID)
+	var i WebauthnCredential
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.UserID,
+		&i.FactorID,
+		&i.CredentialID,
+		&i.Credential,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const invalidateMFABackupCodes = `-- name: InvalidateMFABackupCodes :exec
+UPDATE mfa_backup_codes SET used_at=COALESCE(used_at, now()) WHERE user_id=$1
+`
+
+func (q *Queries) InvalidateMFABackupCodes(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, invalidateMFABackupCodes, userID)
+	return err
+}
+
 const listMFAFactorsByUser = `-- name: ListMFAFactorsByUser :many
 SELECT id, user_id, type, label, secret_encrypted, public_key, confirmed_at, created_at, tenant_id FROM mfa_factors WHERE user_id = $1 ORDER BY created_at
 `
@@ -218,4 +357,53 @@ func (q *Queries) ListMFAFactorsByUser(ctx context.Context, userID string) ([]Mf
 		return nil, err
 	}
 	return items, nil
+}
+
+const listWebAuthnCredentialsByUser = `-- name: ListWebAuthnCredentialsByUser :many
+SELECT id, tenant_id, user_id, factor_id, credential_id, credential, created_at, updated_at FROM webauthn_credentials WHERE user_id=$1 ORDER BY created_at
+`
+
+func (q *Queries) ListWebAuthnCredentialsByUser(ctx context.Context, userID string) ([]WebauthnCredential, error) {
+	rows, err := q.db.Query(ctx, listWebAuthnCredentialsByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WebauthnCredential
+	for rows.Next() {
+		var i WebauthnCredential
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.UserID,
+			&i.FactorID,
+			&i.CredentialID,
+			&i.Credential,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateWebAuthnCredential = `-- name: UpdateWebAuthnCredential :exec
+UPDATE webauthn_credentials SET credential=$3::text::jsonb,updated_at=now()
+WHERE credential_id=$1 AND user_id=$2
+`
+
+type UpdateWebAuthnCredentialParams struct {
+	CredentialID []byte `json:"credential_id"`
+	UserID       string `json:"user_id"`
+	Credential   string `json:"credential"`
+}
+
+func (q *Queries) UpdateWebAuthnCredential(ctx context.Context, arg UpdateWebAuthnCredentialParams) error {
+	_, err := q.db.Exec(ctx, updateWebAuthnCredential, arg.CredentialID, arg.UserID, arg.Credential)
+	return err
 }

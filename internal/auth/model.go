@@ -44,8 +44,8 @@ type Role struct {
 type MFAFactorType string
 
 const (
-	MFAFactorTOTP      MFAFactorType = "totp"
-	MFAFactorBiometric MFAFactorType = "biometric"
+	MFAFactorTOTP     MFAFactorType = "totp"
+	MFAFactorWebAuthn MFAFactorType = "webauthn"
 )
 
 type MFAFactor struct {
@@ -57,6 +57,21 @@ type MFAFactor struct {
 	PublicKey       *string
 	ConfirmedAt     *time.Time
 	CreatedAt       time.Time
+}
+
+type WebAuthnCredential struct {
+	ID, UserID, FactorID string
+	CredentialID         []byte
+	CredentialJSON       []byte
+	CreatedAt            time.Time
+}
+
+type WebAuthnCeremony struct {
+	ID, UserID, Purpose, Label          string
+	LoginChallengeID, EnrollmentTokenID *string
+	SessionData                         []byte
+	ExpiresAt                           time.Time
+	ConsumedAt                          *time.Time
 }
 
 func (f *MFAFactor) IsConfirmed() bool { return f.ConfirmedAt != nil }

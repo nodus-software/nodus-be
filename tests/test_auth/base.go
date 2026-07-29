@@ -2,9 +2,6 @@ package test_auth
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -139,17 +136,6 @@ func CurrentTOTPCode(t *testing.T, secret string) string {
 	}
 	return code
 }
-func generateEd25519Keypair(t *testing.T) (string, ed25519.PrivateKey) {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(pub), priv
-}
-func signChallenge(priv ed25519.PrivateKey, challenge string) string {
-	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(challenge)))
-}
 
 func (e *Env) CreateUser(t *testing.T, username, email, password string) string {
 	t.Helper()
@@ -178,12 +164,6 @@ func (e *Env) EnrollTOTP(t *testing.T, userID string) string {
 	now := time.Now()
 	e.Repo.factors[id] = auth.MFAFactor{ID: id, UserID: userID, Type: auth.MFAFactorTOTP, SecretEncrypted: &encrypted, ConfirmedAt: &now, CreatedAt: now}
 	return key.Secret()
-}
-func (e *Env) EnrollBiometric(t *testing.T, userID, publicKey string) {
-	t.Helper()
-	id, _ := utility.GenerateUUID()
-	now := time.Now()
-	e.Repo.factors[id] = auth.MFAFactor{ID: id, UserID: userID, Type: auth.MFAFactorBiometric, PublicKey: &publicKey, ConfirmedAt: &now, CreatedAt: now}
 }
 func (e *Env) CreateSession(t *testing.T, userID string) string {
 	t.Helper()
@@ -269,22 +249,24 @@ type enrollmentToken struct {
 }
 type memoryRepo struct {
 	sync.Mutex
-	users       map[string]auth.User
-	challenges  map[string]auth.LoginChallenge
-	sessions    map[string]auth.Session
-	refresh     map[string]auth.RefreshToken
-	resets      map[string]auth.PasswordResetToken
-	factors     map[string]auth.MFAFactor
-	backup      map[string]backupCode
-	attempts    []resetAttempt
-	roles       map[string][]auth.Role
-	permissions map[string][]string
-	enrollments map[string]enrollmentToken
-	key         [32]byte
+	users               map[string]auth.User
+	challenges          map[string]auth.LoginChallenge
+	sessions            map[string]auth.Session
+	refresh             map[string]auth.RefreshToken
+	resets              map[string]auth.PasswordResetToken
+	factors             map[string]auth.MFAFactor
+	backup              map[string]backupCode
+	attempts            []resetAttempt
+	roles               map[string][]auth.Role
+	permissions         map[string][]string
+	enrollments         map[string]enrollmentToken
+	webauthnCredentials map[string]auth.WebAuthnCredential
+	webauthnCeremonies  map[string]auth.WebAuthnCeremony
+	key                 [32]byte
 }
 
 func newMemoryRepo() *memoryRepo {
-	r := &memoryRepo{users: map[string]auth.User{}, challenges: map[string]auth.LoginChallenge{}, sessions: map[string]auth.Session{}, refresh: map[string]auth.RefreshToken{}, resets: map[string]auth.PasswordResetToken{}, factors: map[string]auth.MFAFactor{}, backup: map[string]backupCode{}, roles: map[string][]auth.Role{}, permissions: map[string][]string{}, enrollments: map[string]enrollmentToken{}}
+	r := &memoryRepo{users: map[string]auth.User{}, challenges: map[string]auth.LoginChallenge{}, sessions: map[string]auth.Session{}, refresh: map[string]auth.RefreshToken{}, resets: map[string]auth.PasswordResetToken{}, factors: map[string]auth.MFAFactor{}, backup: map[string]backupCode{}, roles: map[string][]auth.Role{}, permissions: map[string][]string{}, enrollments: map[string]enrollmentToken{}, webauthnCredentials: map[string]auth.WebAuthnCredential{}, webauthnCeremonies: map[string]auth.WebAuthnCeremony{}}
 	copy(r.key[:], "test-only-mfa-encryption-key-32!")
 	return r
 }
@@ -609,6 +591,24 @@ func (r *memoryRepo) ConsumeMFABackupCode(_ context.Context, id string) error {
 	r.backup[id] = b
 	return nil
 }
+func (r *memoryRepo) CountUnusedMFABackupCodes(_ context.Context, uid string) (int, error) {
+	n := 0
+	for _, b := range r.backup {
+		if b.userID == uid && !b.used {
+			n++
+		}
+	}
+	return n, nil
+}
+func (r *memoryRepo) InvalidateMFABackupCodes(_ context.Context, uid string) error {
+	for id, b := range r.backup {
+		if b.userID == uid {
+			b.used = true
+			r.backup[id] = b
+		}
+	}
+	return nil
+}
 func (r *memoryRepo) GetEnrollmentTokenByHash(_ context.Context, hash string) (string, string, time.Time, bool, error) {
 	for _, token := range r.enrollments {
 		if token.hash == hash {
@@ -624,6 +624,57 @@ func (r *memoryRepo) ConsumeEnrollmentToken(_ context.Context, id string) error 
 	}
 	token.consumed = true
 	r.enrollments[id] = token
+	return nil
+}
+func (r *memoryRepo) CreateWebAuthnCredential(_ context.Context, c auth.WebAuthnCredential) error {
+	r.webauthnCredentials[string(c.CredentialID)] = c
+	return nil
+}
+func (r *memoryRepo) ListWebAuthnCredentialsByUser(_ context.Context, uid string) ([]auth.WebAuthnCredential, error) {
+	var out []auth.WebAuthnCredential
+	for _, c := range r.webauthnCredentials {
+		if c.UserID == uid {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+func (r *memoryRepo) UpdateWebAuthnCredential(_ context.Context, uid string, id, data []byte) error {
+	c, ok := r.webauthnCredentials[string(id)]
+	if !ok || c.UserID != uid {
+		return auth.ErrFactorNotFound
+	}
+	c.CredentialJSON = data
+	r.webauthnCredentials[string(id)] = c
+	return nil
+}
+func (r *memoryRepo) CreateWebAuthnCeremony(_ context.Context, c auth.WebAuthnCeremony) error {
+	r.webauthnCeremonies[c.ID] = c
+	return nil
+}
+func (r *memoryRepo) GetWebAuthnCeremonyByID(_ context.Context, id string) (*auth.WebAuthnCeremony, error) {
+	c, ok := r.webauthnCeremonies[id]
+	if !ok {
+		return nil, auth.ErrChallengeInvalid
+	}
+	return &c, nil
+}
+func (r *memoryRepo) ConsumeWebAuthnCeremony(_ context.Context, id string) error {
+	c, ok := r.webauthnCeremonies[id]
+	if !ok || c.ConsumedAt != nil || !c.ExpiresAt.After(time.Now()) {
+		return auth.ErrChallengeInvalid
+	}
+	now := time.Now()
+	c.ConsumedAt = &now
+	r.webauthnCeremonies[id] = c
+	return nil
+}
+func (r *memoryRepo) DeletePendingTOTPFactors(_ context.Context, uid string) error {
+	for id, f := range r.factors {
+		if f.UserID == uid && f.Type == auth.MFAFactorTOTP && !f.IsConfirmed() {
+			delete(r.factors, id)
+		}
+	}
 	return nil
 }
 func (r *memoryRepo) GetRolesByUser(_ context.Context, uid string) ([]auth.Role, error) {

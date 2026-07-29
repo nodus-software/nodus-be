@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 const randomTokenBytes = 32 // 256 bits
@@ -40,4 +41,12 @@ func GenerateBackupCode() (string, error) {
 	}
 	raw := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(buf)
 	return raw[0:4] + "-" + raw[4:8] + "-" + raw[8:12] + "-" + raw[12:16], nil
+}
+
+// NormalizeRecoveryCode defines the only representation that is hashed.
+// Display separators and ASCII case are cosmetic; no characters are silently
+// stripped other than the separators we generate.
+func NormalizeRecoveryCode(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	return strings.ReplaceAll(code, "-", "")
 }

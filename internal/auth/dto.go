@@ -1,6 +1,11 @@
 package auth
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/go-webauthn/webauthn/protocol"
+)
 
 type LoginRequest struct {
 	Email    string `json:"email" validate:"required,email"`
@@ -19,7 +24,7 @@ type AccountLockedResponse struct {
 
 type VerifyMFARequest struct {
 	ChallengeToken string `json:"challenge_token" validate:"required"`
-	Method         string `json:"method" validate:"required,oneof=totp biometric"`
+	Method         string `json:"method" validate:"required,oneof=totp recovery_code"`
 	Code           string `json:"code" validate:"required"`
 	RememberMe     bool   `json:"remember_me"`
 }
@@ -48,18 +53,29 @@ type UserProfileResponse struct {
 }
 
 type TOTPSetupResponse struct {
-	Secret      string   `json:"secret"`
-	QRCodeURI   string   `json:"qr_code_uri"`
-	BackupCodes []string `json:"backup_codes"`
+	Secret    string `json:"secret"`
+	QRCodeURI string `json:"qr_code_uri"`
 }
 
 type ConfirmTOTPRequest struct {
 	Code string `json:"code" validate:"required"`
 }
 
-type RegisterBiometricRequest struct {
-	DevicePublicKey string `json:"device_public_key" validate:"required"`
-	DeviceLabel     string `json:"device_label"`
+type ConfirmTOTPResponse struct {
+	Status        string   `json:"status"`
+	RecoveryCodes []string `json:"recovery_codes,omitempty"`
+}
+
+type RecoveryCodeStatusResponse struct {
+	Remaining int  `json:"remaining"`
+	Generated bool `json:"generated"`
+}
+type RegenerateRecoveryCodesRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required"`
+}
+type RecoveryCodesResponse struct {
+	RecoveryCodes []string `json:"recovery_codes"`
+	Remaining     int      `json:"remaining"`
 }
 
 type MFAFactorResponse struct {
@@ -67,6 +83,40 @@ type MFAFactorResponse struct {
 	Type      string    `json:"type"`
 	Label     string    `json:"label"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type RemoveMFAFactorRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required"`
+}
+
+type WebAuthnRegistrationOptionsRequest struct {
+	CurrentPassword string `json:"current_password"`
+	Label           string `json:"label" validate:"required,max=80"`
+}
+type WebAuthnRegistrationOptionsResponse struct {
+	CeremonyID string                                      `json:"ceremony_id"`
+	PublicKey  protocol.PublicKeyCredentialCreationOptions `json:"public_key"`
+}
+type WebAuthnRegistrationVerifyRequest struct {
+	CeremonyID string          `json:"ceremony_id" validate:"required"`
+	Credential json.RawMessage `json:"credential" validate:"required"`
+}
+type WebAuthnRegistrationVerifyResponse struct {
+	Factor        MFAFactorResponse `json:"factor"`
+	RecoveryCodes []string          `json:"recovery_codes,omitempty"`
+}
+type WebAuthnLoginOptionsRequest struct {
+	ChallengeToken string `json:"challenge_token" validate:"required"`
+}
+type WebAuthnLoginOptionsResponse struct {
+	CeremonyID string                                     `json:"ceremony_id"`
+	PublicKey  protocol.PublicKeyCredentialRequestOptions `json:"public_key"`
+}
+type WebAuthnLoginVerifyRequest struct {
+	ChallengeToken string          `json:"challenge_token" validate:"required"`
+	CeremonyID     string          `json:"ceremony_id" validate:"required"`
+	Credential     json.RawMessage `json:"credential" validate:"required"`
+	RememberMe     bool            `json:"remember_me"`
 }
 
 type ChangePasswordRequest struct {

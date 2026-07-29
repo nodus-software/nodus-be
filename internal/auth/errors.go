@@ -25,6 +25,9 @@ var (
 	ErrUserNotFound            = errors.New("user not found")
 	ErrPermissionDenied        = errors.New("permission denied")
 	ErrEnrollmentTokenInvalid  = errors.New("enrollment token invalid, expired, or already used")
+	ErrWebAuthnInvalid         = errors.New("passkey verification failed")
+	ErrWebAuthnUnavailable     = errors.New("passkey authentication is unavailable")
+	ErrTOTPAlreadyEnrolled     = errors.New("an authenticator app is already enrolled")
 )
 
 // LockedError wraps ErrAccountLocked with the lockout expiry so the handler

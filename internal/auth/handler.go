@@ -106,6 +106,8 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 		response.Error(w, http.StatusGone, "CHALLENGE_EXPIRED", err.Error())
 	case errors.Is(err, ErrResetTokenInvalid), errors.Is(err, ErrInvalidPublicKey):
 		response.BadRequest(w, err.Error())
+	case errors.Is(err, ErrWebAuthnInvalid), errors.Is(err, ErrWebAuthnUnavailable):
+		response.BadRequest(w, err.Error())
 	case errors.Is(err, ErrInvalidCredentials),
 		errors.Is(err, ErrMFANotEnrolled),
 		errors.Is(err, ErrMFACodeInvalid),
@@ -118,6 +120,8 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 		response.NotFound(w, err.Error())
 	case errors.Is(err, ErrLastFactorRemaining):
 		response.Conflict(w, err.Error())
+	case errors.Is(err, ErrTOTPAlreadyEnrolled):
+		response.Conflict(w, err.Error())
 	case errors.Is(err, ErrRateLimitExceeded):
 		response.Error(w, http.StatusTooManyRequests, "RATE_LIMITED", err.Error())
 	case errors.Is(err, ErrPermissionDenied):
@@ -126,6 +130,68 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 		h.log.Error("unexpected auth domain error", "error", err.Error())
 		response.Internal(w)
 	}
+}
+
+func (h *Handler) WebAuthnRegistrationOptions(w http.ResponseWriter, r *http.Request) {
+	ac, ok := authContext(w, r)
+	if !ok {
+		return
+	}
+	req, ok := bindJSON[WebAuthnRegistrationOptionsRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.BeginWebAuthnRegistration(r.Context(), ac.UserID, ac.EnrollmentTokenID, req)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
+}
+func (h *Handler) WebAuthnRegistrationVerify(w http.ResponseWriter, r *http.Request) {
+	ac, ok := authContext(w, r)
+	if !ok {
+		return
+	}
+	req, ok := bindJSON[WebAuthnRegistrationVerifyRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.FinishWebAuthnRegistration(r.Context(), ac.UserID, ac.EnrollmentTokenID, req)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.Created(w, result)
+}
+func (h *Handler) WebAuthnLoginOptions(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[WebAuthnLoginOptionsRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.BeginWebAuthnLogin(r.Context(), req)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
+}
+func (h *Handler) WebAuthnLoginVerify(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[WebAuthnLoginVerifyRequest](w, r)
+	if !ok {
+		return
+	}
+	pair, err := h.service.FinishWebAuthnLogin(r.Context(), req, clientIP(r), r.UserAgent(), deviceLabelFromUserAgent(r.UserAgent()))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.setRefreshCookie(w, pair)
+	response.OK(w, pair)
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +293,8 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.service.ConfirmTOTP(r.Context(), ac.UserID, req.Code); err != nil {
+	result, err := h.service.ConfirmTOTP(r.Context(), ac.UserID, req.Code, ac.EnrollmentTokenID)
+	if err != nil {
 		if errors.Is(err, ErrMFACodeInvalid) {
 			response.BadRequest(w, err.Error())
 			return
@@ -235,30 +302,7 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	if ac.EnrollmentTokenID != "" {
-		if err := h.service.ConsumeEnrollmentToken(r.Context(), ac.EnrollmentTokenID); err != nil {
-			h.writeError(w, err)
-			return
-		}
-	}
-	response.OK(w, map[string]string{"status": "enabled"})
-}
-
-func (h *Handler) RegisterBiometric(w http.ResponseWriter, r *http.Request) {
-	ac, ok := authContext(w, r)
-	if !ok {
-		return
-	}
-	req, ok := bindJSON[RegisterBiometricRequest](w, r)
-	if !ok {
-		return
-	}
-	factor, err := h.service.RegisterBiometric(r.Context(), ac.UserID, req)
-	if err != nil {
-		h.writeError(w, err)
-		return
-	}
-	response.Created(w, MFAFactorResponse{ID: factor.ID, Type: string(factor.Type), Label: factor.Label, CreatedAt: factor.CreatedAt})
+	response.OK(w, result)
 }
 
 func (h *Handler) ListFactors(w http.ResponseWriter, r *http.Request) {
@@ -280,11 +324,46 @@ func (h *Handler) RemoveFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	factorID := chi.URLParam(r, "factorId")
-	if err := h.service.RemoveFactor(r.Context(), ac.UserID, factorID); err != nil {
+	req, ok := bindJSON[RemoveMFAFactorRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.RemoveFactor(r.Context(), ac.UserID, factorID, req.CurrentPassword); err != nil {
 		h.writeError(w, err)
 		return
 	}
 	response.NoContent(w)
+}
+
+func (h *Handler) RecoveryCodeStatus(w http.ResponseWriter, r *http.Request) {
+	ac, ok := authContext(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.RecoveryCodeStatus(r.Context(), ac.UserID)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.OK(w, result)
+}
+
+func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	ac, ok := authContext(w, r)
+	if !ok {
+		return
+	}
+	req, ok := bindJSON[RegenerateRecoveryCodesRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.RegenerateRecoveryCodes(r.Context(), ac.UserID, req)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
 }
 
 func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {

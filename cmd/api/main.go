@@ -70,9 +70,13 @@ func main() {
 
 		BcryptCost: cfg.BcryptCost,
 
-		TOTPIssuer:         cfg.TOTPIssuer,
-		MFABackupCodeCount: cfg.MFABackupCodeCount,
-		MFAEncryptionKey:   mfaKey,
+		TOTPIssuer:            cfg.TOTPIssuer,
+		MFABackupCodeCount:    cfg.MFABackupCodeCount,
+		MFAEncryptionKey:      mfaKey,
+		WebAuthnRPDisplayName: cfg.WebAuthnRPDisplayName,
+		WebAuthnRPID:          cfg.WebAuthnRPID,
+		WebAuthnOrigins:       cfg.WebAuthnOrigins,
+		WebAuthnCeremonyTTL:   cfg.WebAuthnCeremonyTTL,
 
 		LockoutMaxAttempts: cfg.LockoutMaxAttempts,
 		LockoutDuration:    cfg.LockoutDuration,

@@ -41,7 +41,7 @@ func (r *Repository) Insert(ctx context.Context, entry audit.Entry) error {
 		TargetResource: entry.TargetResource,
 		IpAddress:      entry.IPAddress,
 		Result:         sqlcgen.AuditResult(entry.Result),
-		Metadata:       metadata,
+		Metadata:       string(metadata),
 	})
 }
 

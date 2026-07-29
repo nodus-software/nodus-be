@@ -56,8 +56,8 @@ func (ns NullAuditResult) Value() (driver.Value, error) {
 type MfaFactorType string
 
 const (
-	MfaFactorTypeTotp      MfaFactorType = "totp"
-	MfaFactorTypeBiometric MfaFactorType = "biometric"
+	MfaFactorTypeTotp     MfaFactorType = "totp"
+	MfaFactorTypeWebauthn MfaFactorType = "webauthn"
 )
 
 func (e *MfaFactorType) Scan(src interface{}) error {
@@ -183,6 +183,48 @@ func (ns NullUserStatus) Value() (driver.Value, error) {
 	return string(ns.UserStatus), nil
 }
 
+type WebauthnCeremonyPurpose string
+
+const (
+	WebauthnCeremonyPurposeRegistration   WebauthnCeremonyPurpose = "registration"
+	WebauthnCeremonyPurposeAuthentication WebauthnCeremonyPurpose = "authentication"
+)
+
+func (e *WebauthnCeremonyPurpose) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WebauthnCeremonyPurpose(s)
+	case string:
+		*e = WebauthnCeremonyPurpose(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WebauthnCeremonyPurpose: %T", src)
+	}
+	return nil
+}
+
+type NullWebauthnCeremonyPurpose struct {
+	WebauthnCeremonyPurpose WebauthnCeremonyPurpose `json:"webauthn_ceremony_purpose"`
+	Valid                   bool                    `json:"valid"` // Valid is true if WebauthnCeremonyPurpose is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWebauthnCeremonyPurpose) Scan(value interface{}) error {
+	if value == nil {
+		ns.WebauthnCeremonyPurpose, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WebauthnCeremonyPurpose.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWebauthnCeremonyPurpose) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WebauthnCeremonyPurpose), nil
+}
+
 type AuditLog struct {
 	ID             string             `json:"id"`
 	Timestamp      pgtype.Timestamptz `json:"timestamp"`
@@ -246,6 +288,18 @@ type MfaFactor struct {
 	ConfirmedAt     pgtype.Timestamptz `json:"confirmed_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	TenantID        string             `json:"tenant_id"`
+}
+
+type MfaResetToken struct {
+	ID          string             `json:"id"`
+	TenantID    string             `json:"tenant_id"`
+	UserID      string             `json:"user_id"`
+	RequestedBy string             `json:"requested_by"`
+	TokenHash   string             `json:"token_hash"`
+	Reason      string             `json:"reason"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt  pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type Organization struct {
@@ -367,4 +421,29 @@ type UserRole struct {
 	RoleID     string             `json:"role_id"`
 	AssignedAt pgtype.Timestamptz `json:"assigned_at"`
 	TenantID   string             `json:"tenant_id"`
+}
+
+type WebauthnCeremony struct {
+	ID                string                  `json:"id"`
+	TenantID          string                  `json:"tenant_id"`
+	UserID            string                  `json:"user_id"`
+	LoginChallengeID  *string                 `json:"login_challenge_id"`
+	EnrollmentTokenID *string                 `json:"enrollment_token_id"`
+	Purpose           WebauthnCeremonyPurpose `json:"purpose"`
+	Label             string                  `json:"label"`
+	SessionData       []byte                  `json:"session_data"`
+	ExpiresAt         pgtype.Timestamptz      `json:"expires_at"`
+	ConsumedAt        pgtype.Timestamptz      `json:"consumed_at"`
+	CreatedAt         pgtype.Timestamptz      `json:"created_at"`
+}
+
+type WebauthnCredential struct {
+	ID           string             `json:"id"`
+	TenantID     string             `json:"tenant_id"`
+	UserID       string             `json:"user_id"`
+	FactorID     string             `json:"factor_id"`
+	CredentialID []byte             `json:"credential_id"`
+	Credential   []byte             `json:"credential"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }

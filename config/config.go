@@ -77,9 +77,13 @@ type Config struct {
 	PasswordMaxAgeDays       int
 
 	// MFA
-	TOTPIssuer         string
-	MFABackupCodeCount int
-	MFAEncryptionKey   string
+	TOTPIssuer            string
+	MFABackupCodeCount    int
+	MFAEncryptionKey      string
+	WebAuthnRPDisplayName string
+	WebAuthnRPID          string
+	WebAuthnOrigins       []string
+	WebAuthnCeremonyTTL   time.Duration
 
 	// Lockout policy
 	LockoutMaxAttempts int
@@ -168,9 +172,13 @@ func Load() (*Config, error) {
 		PasswordRejectCommon:     getEnvBool("PASSWORD_REJECT_COMMON", true),
 		PasswordMaxAgeDays:       getEnvInt("PASSWORD_MAX_AGE_DAYS", 90),
 
-		TOTPIssuer:         getEnv("TOTP_ISSUER", "Nodus Health"),
-		MFABackupCodeCount: getEnvInt("MFA_BACKUP_CODE_COUNT", 10),
-		MFAEncryptionKey:   requiredWithDevDefault("MFA_ENCRYPTION_KEY", development, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+		TOTPIssuer:            getEnv("TOTP_ISSUER", "Nodus Health"),
+		MFABackupCodeCount:    getEnvInt("MFA_BACKUP_CODE_COUNT", 10),
+		MFAEncryptionKey:      requiredWithDevDefault("MFA_ENCRYPTION_KEY", development, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+		WebAuthnRPDisplayName: getEnv("WEBAUTHN_RP_DISPLAY_NAME", "Nodus Health"),
+		WebAuthnRPID:          getEnv("WEBAUTHN_RP_ID", "localhost"),
+		WebAuthnOrigins:       strings.Fields(getEnv("WEBAUTHN_ORIGINS", "http://localhost:5173 http://localhost:3000")),
+		WebAuthnCeremonyTTL:   getEnvDuration("WEBAUTHN_CEREMONY_TTL", 5*time.Minute),
 
 		LockoutMaxAttempts: getEnvInt("LOCKOUT_MAX_ATTEMPTS", 5),
 		LockoutDuration:    getEnvDuration("LOCKOUT_DURATION", 15*time.Minute),
@@ -192,6 +200,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.RefreshCookieSameSite != "lax" && cfg.RefreshCookieSameSite != "strict" {
 		return nil, fmt.Errorf("REFRESH_COOKIE_SAME_SITE must be lax or strict")
+	}
+	if cfg.WebAuthnRPID == "" || len(cfg.WebAuthnOrigins) == 0 || cfg.WebAuthnCeremonyTTL <= 0 {
+		return nil, fmt.Errorf("WebAuthn RP ID, origins, and ceremony TTL must be configured")
 	}
 
 	return cfg, nil

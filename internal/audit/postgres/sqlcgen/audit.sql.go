@@ -13,7 +13,7 @@ import (
 
 const insertAuditLog = `-- name: InsertAuditLog :exec
 INSERT INTO audit_logs (id, "timestamp", user_id, action, target_resource, ip_address, result, metadata)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb)
 `
 
 type InsertAuditLogParams struct {
@@ -24,7 +24,7 @@ type InsertAuditLogParams struct {
 	TargetResource string             `json:"target_resource"`
 	IpAddress      string             `json:"ip_address"`
 	Result         AuditResult        `json:"result"`
-	Metadata       []byte             `json:"metadata"`
+	Metadata       string             `json:"metadata"`
 }
 
 func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error {
