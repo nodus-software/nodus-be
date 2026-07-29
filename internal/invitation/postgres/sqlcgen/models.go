@@ -138,6 +138,135 @@ func (ns NullOrganizationStatus) Value() (driver.Value, error) {
 	return string(ns.OrganizationStatus), nil
 }
 
+type PatientCorrectionStatus string
+
+const (
+	PatientCorrectionStatusPending  PatientCorrectionStatus = "pending"
+	PatientCorrectionStatusActioned PatientCorrectionStatus = "actioned"
+	PatientCorrectionStatusRejected PatientCorrectionStatus = "rejected"
+)
+
+func (e *PatientCorrectionStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PatientCorrectionStatus(s)
+	case string:
+		*e = PatientCorrectionStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PatientCorrectionStatus: %T", src)
+	}
+	return nil
+}
+
+type NullPatientCorrectionStatus struct {
+	PatientCorrectionStatus PatientCorrectionStatus `json:"patient_correction_status"`
+	Valid                   bool                    `json:"valid"` // Valid is true if PatientCorrectionStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPatientCorrectionStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.PatientCorrectionStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PatientCorrectionStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPatientCorrectionStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PatientCorrectionStatus), nil
+}
+
+type PatientGender string
+
+const (
+	PatientGenderMale    PatientGender = "male"
+	PatientGenderFemale  PatientGender = "female"
+	PatientGenderUnknown PatientGender = "unknown"
+)
+
+func (e *PatientGender) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PatientGender(s)
+	case string:
+		*e = PatientGender(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PatientGender: %T", src)
+	}
+	return nil
+}
+
+type NullPatientGender struct {
+	PatientGender PatientGender `json:"patient_gender"`
+	Valid         bool          `json:"valid"` // Valid is true if PatientGender is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPatientGender) Scan(value interface{}) error {
+	if value == nil {
+		ns.PatientGender, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PatientGender.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPatientGender) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PatientGender), nil
+}
+
+type PatientStatus string
+
+const (
+	PatientStatusActive   PatientStatus = "active"
+	PatientStatusDeceased PatientStatus = "deceased"
+	PatientStatusMerged   PatientStatus = "merged"
+)
+
+func (e *PatientStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PatientStatus(s)
+	case string:
+		*e = PatientStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PatientStatus: %T", src)
+	}
+	return nil
+}
+
+type NullPatientStatus struct {
+	PatientStatus PatientStatus `json:"patient_status"`
+	Valid         bool          `json:"valid"` // Valid is true if PatientStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPatientStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.PatientStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PatientStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPatientStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PatientStatus), nil
+}
+
 type UserStatus string
 
 const (
@@ -337,6 +466,81 @@ type PasswordResetToken struct {
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	TenantID  string             `json:"tenant_id"`
+}
+
+type Patient struct {
+	ID             string             `json:"id"`
+	TenantID       string             `json:"tenant_id"`
+	Mrn            string             `json:"mrn"`
+	FullName       string             `json:"full_name"`
+	Dob            pgtype.Date        `json:"dob"`
+	DobEstimated   bool               `json:"dob_estimated"`
+	ApproxAgeYears *int16             `json:"approx_age_years"`
+	Gender         PatientGender      `json:"gender"`
+	Phone          *string            `json:"phone"`
+	Address        *string            `json:"address"`
+	NationalID     *string            `json:"national_id"`
+	Status         PatientStatus      `json:"status"`
+	DateOfDeath    pgtype.Timestamptz `json:"date_of_death"`
+	Insured        bool               `json:"insured"`
+	GuardianID     *string            `json:"guardian_id"`
+	MergedIntoID   *string            `json:"merged_into_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PatientActivityLog struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	PatientID string             `json:"patient_id"`
+	UserID    *string            `json:"user_id"`
+	Kind      string             `json:"kind"`
+	Text      string             `json:"text"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type PatientConsent struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	PatientID string             `json:"patient_id"`
+	Scope     string             `json:"scope"`
+	Granted   bool               `json:"granted"`
+	GrantedAt pgtype.Timestamptz `json:"granted_at"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PatientCorrection struct {
+	ID             string                  `json:"id"`
+	TenantID       string                  `json:"tenant_id"`
+	PatientID      string                  `json:"patient_id"`
+	Field          string                  `json:"field"`
+	CurrentValue   *string                 `json:"current_value"`
+	RequestedValue string                  `json:"requested_value"`
+	EvidenceNote   *string                 `json:"evidence_note"`
+	Status         PatientCorrectionStatus `json:"status"`
+	SubmittedBy    *string                 `json:"submitted_by"`
+	DecidedBy      *string                 `json:"decided_by"`
+	DecidedAt      pgtype.Timestamptz      `json:"decided_at"`
+	DecisionNote   *string                 `json:"decision_note"`
+	CreatedAt      pgtype.Timestamptz      `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz      `json:"updated_at"`
+}
+
+type PatientIdentifier struct {
+	ID         string             `json:"id"`
+	TenantID   string             `json:"tenant_id"`
+	PatientID  string             `json:"patient_id"`
+	IDType     string             `json:"id_type"`
+	IDValue    string             `json:"id_value"`
+	VerifiedAt pgtype.Timestamptz `json:"verified_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type PatientMrnSequence struct {
+	TenantID  string `json:"tenant_id"`
+	NextValue int64  `json:"next_value"`
 }
 
 type Permission struct {

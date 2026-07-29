@@ -52,6 +52,7 @@ tags:
   - name: Users
   - name: Roles
   - name: AuditLog
+  - name: Patient Management
 
 paths:
 
@@ -948,6 +949,413 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AuditLogListResponse" }
 
+  # ---------------- PATIENT MANAGEMENT ----------------
+  # Registering, listing/searching, and merging patient records within the
+  # caller's own tenant/facility. Deliberately excludes cross-facility/
+  # cross-tenant patient search (a separate, national-registry-style
+  # capability) - every endpoint here is scoped to the caller's tenant only,
+  # the same as every other domain in this contract.
+
+  /patients:
+    get:
+      tags: [Patient Management]
+      summary: List/search patients (requires patients:read)
+      description: >
+        Scoped to the caller's tenant only. status, gender, and insurance
+        accept comma-separated values for multi-select filtering (e.g.
+        status=active,deceased). q matches full_name, mrn, national_id, and
+        phone. This is the first endpoint in the API to actually populate
+        the meta pagination envelope - page/perPage/total/totalPages are all
+        present in the response.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: "Matches full_name, mrn, national_id, phone" }
+        - { name: status, in: query, schema: { type: string }, description: "Comma-separated: active,deceased,merged" }
+        - { name: gender, in: query, schema: { type: string }, description: "Comma-separated: male,female,unknown" }
+        - { name: insurance, in: query, schema: { type: string }, description: "Comma-separated: insured,uninsured" }
+        - { name: regFrom, in: query, schema: { type: string, format: date } }
+        - { name: regTo, in: query, schema: { type: string, format: date } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: perPage, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientListResponse" }
+    post:
+      tags: [Patient Management]
+      summary: Register a new patient (requires patients:write)
+      description: >
+        Supports three intake modes: normal, unknown/unidentified
+        (unknown=true - only gender and approx_age_years are required,
+        full_name is generated server-side as "Unknown {Gender}, approx.
+        {age} yrs"), and minor (minor=true - requires a guardian selection,
+        either linking an existing patient or registering a new guardian
+        patient inline in the same request; both rows are created
+        atomically in one transaction). mrn is always generated server-side,
+        atomically, per tenant - never client-supplied.
+
+        Runs the same similarity search as GET /patients/duplicate-check as
+        a server-side guard: if a high-confidence match exists and
+        duplicate_override is not set to true, the request is rejected with
+        409 and the candidate(s) are returned in error.details rather than
+        silently blocked outright - staff may legitimately be registering a
+        different person who happens to share a name/DOB. Logged as an
+        audit event: action=patient_registered.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterPatientRequest" }
+      responses:
+        "201":
+          description: Patient (and guardian, if newly created) registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientResponse" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /patients/export:
+    get:
+      tags: [Patient Management]
+      summary: Export the patient list (requires patients:read)
+      description: >
+        Accepts the same search/filter query parameters as GET /patients,
+        plus a required format. Streams the file directly in the response
+        (no background job/queue - the result set is capped to keep this
+        synchronous-safe). Logged as an audit event:
+        action=patient_list_exported, since bulk export is the
+        highest-risk PII read in this domain.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: format, in: query, required: true, schema: { type: string, enum: [csv] }, description: "xlsx and pdf are planned but not yet implemented" }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: gender, in: query, schema: { type: string } }
+        - { name: insurance, in: query, schema: { type: string } }
+        - { name: regFrom, in: query, schema: { type: string, format: date } }
+        - { name: regTo, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: File stream
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+
+  /patients/duplicate-check:
+    get:
+      tags: [Patient Management]
+      summary: Search for possible duplicate patients (requires patients:read)
+      description: >
+        Ranks existing (non-merged) patients in the tenant by a combined
+        Postgres trigram name-similarity score plus exact-match boosts for
+        DOB, national_id, and phone. Returns a ranked candidate list, not a
+        single match - the caller decides what to do with medium/low
+        confidence results. The same search backs the server-side guard on
+        POST /patients.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: full_name, in: query, required: true, schema: { type: string } }
+        - { name: dob, in: query, schema: { type: string, format: date } }
+        - { name: national_id, in: query, schema: { type: string } }
+        - { name: phone, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientDuplicateCandidateListResponse" }
+
+  /patients/{patientId}:
+    get:
+      tags: [Patient Management]
+      summary: Get a single patient by ID (requires patients:read)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /patients/{patientId}/contact:
+    patch:
+      tags: [Patient Management]
+      summary: Update a patient's phone/address (requires patients:write)
+      description: >
+        Only phone and address are directly editable. Legal name, DOB,
+        gender, and national_id are protected fields that can only change
+        via a submitted-then-decided correction request - see
+        POST /patients/{patientId}/corrections.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone: { type: string }
+                address: { type: string }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /patients/{patientId}/mark-deceased:
+    post:
+      tags: [Patient Management]
+      summary: Mark a patient as deceased (requires patients:write)
+      description: Logged as an audit event (action=patient_marked_deceased).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MarkDeceasedRequest" }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /patients/{patientId}/corrections:
+    get:
+      tags: [Patient Management]
+      summary: List correction requests for a patient (requires patients:read)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientCorrectionListResponse" }
+    post:
+      tags: [Patient Management]
+      summary: Submit a correction request for a protected field (requires patients:write)
+      description: >
+        field must be one of full_name, dob, gender, national_id. Creates a
+        pending correction; it has no effect on the patient record until
+        actioned via POST /patients/corrections/{correctionId}/action.
+        Logged as an audit event: action=patient_correction_submitted.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatientCorrectionRequest" }
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientCorrectionResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /patients/corrections/{correctionId}/action:
+    post:
+      tags: [Patient Management]
+      summary: Action or reject a pending correction request (requires patients:write)
+      description: >
+        Actioning writes requested_value onto the patient's protected
+        field; rejecting leaves the patient record untouched. Only valid on
+        a correction that is still pending. Logged as an audit event:
+        action=patient_correction_decided.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: correctionId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatientCorrectionDecisionRequest" }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientCorrectionResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /patients/{patientId}/identifiers:
+    get:
+      tags: [Patient Management]
+      summary: List a patient's identifiers (requires patients:read)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientIdentifierListResponse" }
+    post:
+      tags: [Patient Management]
+      summary: Add an identifier to a patient (requires patients:write)
+      description: >
+        New identifiers always start unverified (verified_label="Pending
+        verification") - there is no automated verification flow yet.
+        Logged as an audit event: action=patient_identifier_added.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddPatientIdentifierRequest" }
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientIdentifierResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /patients/{patientId}/identifiers/{identifierId}:
+    delete:
+      tags: [Patient Management]
+      summary: Remove an identifier from a patient (requires patients:write)
+      description: Logged as an audit event (action=patient_identifier_removed).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+        - { name: identifierId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Identifier removed }
+
+  /patients/{patientId}/consents:
+    get:
+      tags: [Patient Management]
+      summary: List a patient's consents (requires patients:read)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientConsentListResponse" }
+
+  /patients/{patientId}/consents/{scope}:
+    put:
+      tags: [Patient Management]
+      summary: Set a patient's consent for a scope (requires patients:write)
+      description: >
+        Idempotent set, not a relative toggle - granted reflects the
+        desired end state. Logged as an audit event:
+        action=patient_consent_updated.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+        - { name: scope, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetPatientConsentRequest" }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientConsentResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /patients/{patientId}/activity:
+    get:
+      tags: [Patient Management]
+      summary: List a patient's activity log (requires patients:read)
+      description: >
+        Combines free-text staff notes with system-generated entries
+        (consent changes, identifier changes, mark-deceased, correction
+        decisions, merges), most recent first.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientActivityEntryListResponse" }
+    post:
+      tags: [Patient Management]
+      summary: Add a free-text activity note to a patient (requires patients:write)
+      description: >
+        The author is always derived from the authenticated caller
+        (AuthContext.UserID) - user_id is never client-supplied.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: patientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddPatientActivityNoteRequest" }
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientActivityEntryResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /patients/merge:
+    post:
+      tags: [Patient Management]
+      summary: Merge two patient records (requires patients:merge)
+      description: >
+        Uses an alias/redirect model, not deletion: the away record is kept
+        (never deleted) but marked status=merged with merged_into_id
+        pointing at the keep record, so old MRN lookups can still resolve
+        and redirect. All of the away record's identifiers, consents,
+        correction requests, and activity log entries are reassigned to
+        the keep record. This is also the resolution path once an
+        unidentified/emergency-intake patient's real identity becomes
+        known and a separate existing record for that person is found -
+        register the unidentified record as away and the real record as
+        keep. Requires its own permission (patients:merge, distinct from
+        patients:write) since it is destructive and hard to reverse.
+        Logged as an audit event: action=patient_merged.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MergePatientsRequest" }
+      responses:
+        "200":
+          description: Merge complete - returns the surviving (kept) patient
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PatientResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1355,3 +1763,256 @@ components:
         metadata:
           type: object
           additionalProperties: true
+
+    # ---------------- PATIENT MANAGEMENT ----------------
+
+    Patient:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        mrn: { type: string, description: "Generated server-side, atomically, per tenant. Never client-supplied." }
+        full_name: { type: string }
+        dob: { type: string, format: date, nullable: true }
+        dob_estimated: { type: boolean }
+        approx_age_years: { type: integer, nullable: true, description: "Only meaningful for unidentified/emergency intakes where an exact DOB isn't known." }
+        gender: { type: string, enum: [male, female, unknown] }
+        phone: { type: string, nullable: true }
+        address: { type: string, nullable: true }
+        national_id: { type: string, nullable: true }
+        status: { type: string, enum: [active, deceased, merged] }
+        date_of_death: { type: string, format: date-time, nullable: true }
+        insured: { type: boolean, description: "Simple flag today; not backed by a real SHA/insurer integration yet." }
+        guardian_id: { type: string, nullable: true, description: "Self-referencing link to the patient record acting as guardian (minor intake)." }
+        merged_into_id: { type: string, nullable: true, description: "Set once this record has been merged away (alias/redirect model). Old MRN lookups should resolve to this ID instead." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PatientResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/Patient" }
+
+    PatientListResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/Patient" }
+
+    GuardianSelection:
+      type: object
+      required: [mode]
+      description: >
+        Selects how a minor's guardian is attached during registration.
+        mode=existing links patient_id as an already-registered patient.
+        mode=new registers a second patient record for the guardian in the
+        same request/transaction. mode=none registers the minor without a
+        linked guardian.
+      properties:
+        mode: { type: string, enum: [existing, new, none] }
+        patient_id: { type: string, description: "Required when mode=existing." }
+        full_name: { type: string, description: "Required when mode=new." }
+        dob: { type: string, format: date }
+        dob_estimated: { type: boolean }
+        gender: { type: string, enum: [male, female, unknown] }
+        phone: { type: string }
+        national_id: { type: string }
+        address: { type: string }
+
+    RegisterPatientRequest:
+      type: object
+      properties:
+        unknown: { type: boolean, description: "Unidentified/emergency intake - only gender and approx_age_years are required; full_name is generated server-side." }
+        minor: { type: boolean, description: "Requires guardian to be set." }
+        full_name: { type: string }
+        dob: { type: string, format: date }
+        dob_estimated: { type: boolean }
+        gender: { type: string, enum: [male, female, unknown] }
+        approx_age_years: { type: integer }
+        phone: { type: string }
+        address: { type: string }
+        national_id: { type: string }
+        guardian: { $ref: "#/components/schemas/GuardianSelection" }
+        duplicate_override: { type: boolean, description: "Set to true to proceed with registration despite a high-confidence duplicate match returned on a prior 409." }
+
+    PatientDuplicateCandidate:
+      type: object
+      properties:
+        patient: { $ref: "#/components/schemas/Patient" }
+        score: { type: number, format: float, description: "Combined trigram-name-similarity + exact-match-boost score." }
+        confidence: { type: string, enum: [high, medium, low] }
+        matched_on: { type: array, items: { type: string }, description: "Which fields contributed exact-match boosts, e.g. [\"dob\", \"national_id\"]." }
+
+    PatientDuplicateCandidateListResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PatientDuplicateCandidate" }
+
+    MarkDeceasedRequest:
+      type: object
+      required: [date_of_death]
+      properties:
+        date_of_death: { type: string, format: date }
+        source: { type: string }
+
+    PatientCorrection:
+      type: object
+      properties:
+        id: { type: string }
+        patient_id: { type: string }
+        field: { type: string, enum: [full_name, dob, gender, national_id] }
+        current_value: { type: string, nullable: true }
+        requested_value: { type: string }
+        evidence_note: { type: string, nullable: true }
+        status: { type: string, enum: [pending, actioned, rejected] }
+        submitted_by: { type: string, nullable: true }
+        decided_by: { type: string, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        decision_note: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    PatientCorrectionRequest:
+      type: object
+      required: [field, requested_value]
+      properties:
+        field: { type: string, enum: [full_name, dob, gender, national_id] }
+        requested_value: { type: string }
+        evidence_note: { type: string }
+
+    PatientCorrectionDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [actioned, rejected] }
+        decision_note: { type: string }
+
+    PatientCorrectionResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/PatientCorrection" }
+
+    PatientCorrectionListResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PatientCorrection" }
+
+    AddPatientIdentifierRequest:
+      type: object
+      required: [id_type, id_value]
+      properties:
+        id_type: { type: string, example: "National ID" }
+        id_value: { type: string }
+
+    PatientIdentifier:
+      type: object
+      properties:
+        id: { type: string }
+        patient_id: { type: string }
+        id_type: { type: string }
+        id_value: { type: string }
+        verified_label: { type: string, description: "\"Pending verification\" until a future verification flow exists." }
+        verified_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    PatientIdentifierResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/PatientIdentifier" }
+
+    PatientIdentifierListResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PatientIdentifier" }
+
+    SetPatientConsentRequest:
+      type: object
+      required: [granted]
+      properties:
+        granted: { type: boolean, description: "Idempotent set, not a relative toggle." }
+
+    PatientConsent:
+      type: object
+      properties:
+        id: { type: string }
+        patient_id: { type: string }
+        scope: { type: string }
+        granted: { type: boolean }
+        granted_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+
+    PatientConsentResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/PatientConsent" }
+
+    PatientConsentListResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PatientConsent" }
+
+    AddPatientActivityNoteRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+
+    PatientActivityEntry:
+      type: object
+      properties:
+        id: { type: string }
+        patient_id: { type: string }
+        user_id: { type: string, nullable: true }
+        kind: { type: string, enum: [note, system], description: "note = free-text staff entry; system = generated by another action (consent change, identifier change, mark-deceased, correction decision, merge)." }
+        text: { type: string }
+        created_at: { type: string, format: date-time }
+
+    PatientActivityEntryResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/PatientActivityEntry" }
+
+    PatientActivityEntryListResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/PatientActivityEntry" }
+
+    MergePatientsRequest:
+      type: object
+      required: [keep_patient_id, away_patient_id, reason]
+      properties:
+        keep_patient_id: { type: string, description: "The record that survives the merge." }
+        away_patient_id: { type: string, description: "The record that becomes an alias, redirected to keep_patient_id." }
+        reason: { type: string, maxLength: 500 }

@@ -1,10 +1,10 @@
 package response
 
 type Meta struct {
-	Page       int `json:"page,omitempty"`
-	PerPage    int `json:"perPage,omitempty"`
-	Total      int `json:"total,omitempty"`
-	TotalPages int `json:"totalPages,omitempty"`
+	Page       int `json:"page"`
+	PerPage    int `json:"perPage"`
+	Total      int `json:"total"`
+	TotalPages int `json:"totalPages"`
 }
 
 func NewMeta(page, perPage, total int) Meta {
