@@ -11,6 +11,8 @@ import (
 	auditpg "nodus-health/internal/audit/postgres"
 	"nodus-health/internal/auth"
 	authpg "nodus-health/internal/auth/postgres"
+	"nodus-health/internal/clinical"
+	clinicalpg "nodus-health/internal/clinical/postgres"
 	"nodus-health/internal/email"
 	"nodus-health/internal/invitation"
 	invitationpg "nodus-health/internal/invitation/postgres"
@@ -139,6 +141,10 @@ func main() {
 	patientsService := patients.NewService(patientsRepo, auditService, log, patients.Config{})
 	patientsHandler := patients.NewHandler(patientsService, authService, cfg.JWTSecret, log)
 
+	clinicalRepo := clinicalpg.New(pool)
+	clinicalService := clinical.NewService(clinicalRepo, auditService)
+	clinicalHandler := clinical.NewHandler(clinicalService, authService, cfg.JWTSecret, log)
+
 	organizationService := organizations.NewService(
 		pool, mailer, emailRenderer, cfg.BaseUrl, cfg.BcryptCost, authCfg.PasswordPolicy, log,
 	)
@@ -154,7 +160,7 @@ func main() {
 		RequestTimeout: cfg.WriteTimeout,
 		TenantResolver: organizationService,
 		TenantPool:     pool,
-	}, log, organizationHandler, authHandler, rolesHandler, usersHandler, invitationHandler, auditHandler, patientsHandler)
+	}, log, organizationHandler, authHandler, rolesHandler, usersHandler, invitationHandler, auditHandler, patientsHandler, clinicalHandler)
 
 	log.Info("starting nodus health api", "env", cfg.AppEnv, "port", cfg.AppPort)
 

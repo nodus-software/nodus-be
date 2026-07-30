@@ -1,0 +1,181 @@
+openapi: 3.1.0
+info:
+  title: Nodus Health Clinical Foundation API
+  version: 0.1.0
+  description: Phase 0 contract for care-location configuration, visits, queues, routing and terminology lookup.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+paths:
+  /clinical/config/{kind}:
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues] }
+    get:
+      summary: List configured clinical resources
+      responses:
+        '200': { description: Resource list, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceListResponse' } } } }
+    post:
+      summary: Create a configured clinical resource
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateResource' } } } }
+      responses:
+        '201': { description: Created resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+  /clinical/visits:
+    post:
+      summary: Create a visit and apply automatic routing rules
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateVisit' } } } }
+      responses:
+        '201': { description: Created visit, content: { application/json: { schema: { $ref: '#/components/schemas/VisitResponse' } } } }
+  /clinical/visits/{visitId}:
+    get:
+      summary: Get a visit
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Visit, content: { application/json: { schema: { $ref: '#/components/schemas/VisitResponse' } } } }
+  /clinical/queues/{queueId}/entries:
+    parameters: [{ name: queueId, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      summary: List active entries on a queue board
+      responses:
+        '200': { description: Queue entries, content: { application/json: { schema: { $ref: '#/components/schemas/QueueEntryListResponse' } } } }
+    post:
+      summary: Add a work item to a queue manually
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Enqueue' } } } }
+      responses:
+        '201': { description: Queue entry, content: { application/json: { schema: { $ref: '#/components/schemas/QueueEntryResponse' } } } }
+  /clinical/queue-entries/{entryId}/transition:
+    post:
+      summary: Move or change the state of a queue entry
+      parameters: [{ name: entryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransitionQueueEntry' } } } }
+      responses:
+        '200': { description: Updated queue entry, content: { application/json: { schema: { $ref: '#/components/schemas/QueueEntryResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/queue-entries/{entryId}/history:
+    get:
+      summary: Get complete manual and automatic movement history
+      parameters: [{ name: entryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Movement history }
+  /clinical/routing-rules:
+    get:
+      summary: List queue routing rules
+      responses: { '200': { description: Routing rules } }
+    post:
+      summary: Create a queue routing rule
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateRoutingRule' } } } }
+      responses: { '201': { description: Created routing rule } }
+  /clinical/terminology/icd10:
+    get:
+      summary: Search the active ICD-10 release
+      parameters: [{ name: q, in: query, required: true, schema: { type: string, minLength: 2 } }]
+      responses: { '200': { description: Matching concepts } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    Envelope:
+      type: object
+      required: [success, data]
+      properties: { success: { const: true }, data: {} }
+    ClinicalResource:
+      type: object
+      required: [id, code, name, active, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        department_id: { type: [string, 'null'], format: uuid }
+        ward_id: { type: [string, 'null'], format: uuid }
+        room_id: { type: [string, 'null'], format: uuid }
+        service_point_id: { type: [string, 'null'], format: uuid }
+        kind: { type: [string, 'null'] }
+        status: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    CreateResource:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        department_id: { type: string, format: uuid }
+        ward_id: { type: string, format: uuid }
+        room_id: { type: string, format: uuid }
+        service_point_id: { type: string, format: uuid }
+        kind: { type: string }
+    Visit:
+      type: object
+      required: [id, patient_id, visit_type, status, started_at, created_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        patient_id: { type: string, format: uuid }
+        visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
+        status: { type: string, enum: [planned, active, completed, cancelled] }
+        reason: { type: [string, 'null'] }
+        started_at: { type: string, format: date-time }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+    CreateVisit:
+      type: object
+      required: [patient_id, visit_type]
+      properties:
+        patient_id: { type: string, format: uuid }
+        visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
+        reason: { type: string }
+    QueueEntry:
+      type: object
+      required: [id, queue_id, subject_type, subject_id, patient_id, status, priority, joined_at]
+      properties:
+        id: { type: string, format: uuid }
+        queue_id: { type: string, format: uuid }
+        queue_name: { type: string }
+        subject_type: { type: string, enum: [visit, admission, order] }
+        subject_id: { type: string, format: uuid }
+        patient_id: { type: string, format: uuid }
+        patient_name: { type: string }
+        patient_mrn: { type: string }
+        status: { type: string, enum: [waiting, called, in_service, paused, transferred, completed, cancelled, no_show] }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        acuity: { type: [integer, 'null'], minimum: 1, maximum: 5 }
+        joined_at: { type: string, format: date-time }
+    Enqueue:
+      type: object
+      required: [subject_type, subject_id, patient_id, priority]
+      properties:
+        subject_type: { type: string, enum: [visit, admission, order] }
+        subject_id: { type: string, format: uuid }
+        patient_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        acuity: { type: integer, minimum: 1, maximum: 5 }
+        reason: { type: string }
+    TransitionQueueEntry:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [waiting, called, in_service, paused, transferred, completed, cancelled, no_show] }
+        queue_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        position: { type: integer }
+        reason: { type: string }
+    CreateRoutingRule:
+      type: object
+      required: [name, event_type, target_queue_id, priority]
+      properties:
+        name: { type: string }
+        event_type: { const: visit.created }
+        visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
+        target_queue_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+    ResourceResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
+    ResourceListResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
+    VisitResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
+    QueueEntryResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
+    QueueEntryListResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
+  responses:
+    Conflict: { description: Concurrent or duplicate active state conflict }
+    ValidationError: { description: Invalid request or state transition }
