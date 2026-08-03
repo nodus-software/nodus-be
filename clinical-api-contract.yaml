@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Nodus Health Clinical Foundation API
-  version: 0.1.0
-  description: Phase 0 contract for care-location configuration, visits, queues, routing and terminology lookup.
+  version: 0.2.0
+  description: Clinical foundation and Phase 1 outpatient workflow API.
 servers:
   - url: http://localhost:8080
 security:
@@ -35,6 +35,71 @@ paths:
       parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: Visit, content: { application/json: { schema: { $ref: '#/components/schemas/VisitResponse' } } } }
+  /clinical/outpatient/check-ins:
+    post:
+      summary: Check a patient into outpatient care and route the visit to triage
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/OutpatientCheckIn' } } } }
+      responses:
+        '201': { description: Created outpatient visit }
+        '409': { description: Patient already has an active outpatient visit }
+  /clinical/outpatient/check-ins/override:
+    post:
+      summary: Authorized, audited override of the active outpatient visit safeguard
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/OutpatientCheckInOverride' } } } }
+      responses: { '201': { description: Created outpatient visit }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/outpatient/visits:
+    get:
+      summary: List today's outpatient visits
+      parameters: [{ name: status, in: query, schema: { type: string, enum: [active, completed, cancelled] } }]
+      responses: { '200': { description: Visit list } }
+  /clinical/visits/{visitId}/encounters:
+    parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+    get: { summary: List visit encounters, responses: { '200': { description: Encounter list } } }
+    post:
+      summary: Start outpatient triage or consultation
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEncounter' } } } }
+      responses: { '201': { description: Started encounter }, '409': { $ref: '#/components/responses/Conflict' } }
+  /clinical/encounters/{encounterId}/observations:
+    post:
+      summary: Record a batch of observations on an active encounter
+      parameters: [{ name: encounterId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RecordObservations' } } } }
+      responses: { '201': { description: Recorded observations }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/encounters/{encounterId}/complete:
+    post:
+      summary: Complete an encounter; triage completion atomically routes to consultation
+      parameters: [{ name: encounterId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CompleteEncounter' } } } }
+      responses: { '200': { description: Completed encounter }, '409': { $ref: '#/components/responses/Conflict' } }
+  /clinical/visits/{visitId}/notes:
+    post:
+      summary: Add an authored clinical note to an active visit
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateNote' } } } }
+      responses: { '201': { description: Created note } }
+  /clinical/visits/{visitId}/diagnoses:
+    post:
+      summary: Add an ICD-10 diagnosis to an active visit
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateDiagnosis' } } } }
+      responses: { '201': { description: Created diagnosis }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/patients/{patientId}/allergies:
+    parameters: [{ name: patientId, in: path, required: true, schema: { type: string, format: uuid } }]
+    get: { summary: List patient allergies, responses: { '200': { description: Allergy list } } }
+    post:
+      summary: Record a patient allergy
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAllergy' } } } }
+      responses: { '201': { description: Created allergy } }
+  /clinical/visits/{visitId}/complete:
+    post:
+      summary: Complete an outpatient visit after consultation and final diagnosis
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Completed visit }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/visits/{visitId}/summary:
+    get:
+      summary: Get the assembled visit, encounter, observation, note, diagnosis, and allergy summary
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Visit summary } }
   /clinical/queues/{queueId}/entries:
     parameters: [{ name: queueId, in: path, required: true, schema: { type: string, format: uuid } }]
     get:
@@ -127,6 +192,42 @@ components:
         patient_id: { type: string, format: uuid }
         visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
         reason: { type: string }
+    OutpatientCheckIn:
+      type: object
+      required: [patient_id]
+      properties: { patient_id: { type: string, format: uuid }, reason: { type: string } }
+    OutpatientCheckInOverride:
+      type: object
+      required: [patient_id, override_reason]
+      properties: { patient_id: { type: string, format: uuid }, reason: { type: string }, override_reason: { type: string, minLength: 1 } }
+    CreateEncounter:
+      type: object
+      required: [encounter_type]
+      properties: { encounter_type: { type: string, enum: [triage, consultation] }, service_point_id: { type: string, format: uuid } }
+    ObservationInput:
+      type: object
+      required: [code]
+      properties: { code: { type: string }, value_numeric: { type: number }, value_text: { type: string }, unit: { type: string } }
+      description: Exactly one of value_numeric and value_text is required.
+    RecordObservations:
+      type: object
+      required: [observations]
+      properties: { observations: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ObservationInput' } } }
+    CompleteEncounter:
+      type: object
+      properties: { consultation_queue_id: { type: string, format: uuid, description: Required when completing triage } }
+    CreateNote:
+      type: object
+      required: [note_type, body]
+      properties: { encounter_id: { type: string, format: uuid }, note_type: { type: string }, body: { type: string, minLength: 1 } }
+    CreateDiagnosis:
+      type: object
+      required: [code, kind]
+      properties: { encounter_id: { type: string, format: uuid }, code: { type: string }, kind: { type: string, enum: [provisional, final, secondary] }, note: { type: string } }
+    CreateAllergy:
+      type: object
+      required: [allergen]
+      properties: { allergen: { type: string }, reaction: { type: string }, severity: { type: string, enum: [mild, moderate, severe] } }
     QueueEntry:
       type: object
       required: [id, queue_id, subject_type, subject_id, patient_id, status, priority, joined_at]

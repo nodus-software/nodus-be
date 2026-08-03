@@ -35,9 +35,9 @@ func (h *Handler) fail(w http.ResponseWriter, e error) {
 	switch {
 	case errors.Is(e, ErrNotFound):
 		response.NotFound(w, e.Error())
-	case errors.Is(e, ErrConflict):
+	case errors.Is(e, ErrConflict), errors.Is(e, ErrActiveVisit):
 		response.Conflict(w, e.Error())
-	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired):
+	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired), errors.Is(e, ErrVisitIncomplete):
 		response.Validation(w, map[string]string{"error": e.Error()})
 	default:
 		h.log.Error("clinical request failed", "error", e.Error())

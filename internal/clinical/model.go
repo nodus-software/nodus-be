@@ -103,3 +103,109 @@ type CreateRoutingRuleRequest struct {
 	TargetQueueID string  `json:"target_queue_id"`
 	Priority      int16   `json:"priority"`
 }
+
+type Encounter struct {
+	ID             string     `json:"id"`
+	VisitID        string     `json:"visit_id"`
+	EncounterType  string     `json:"encounter_type"`
+	Status         string     `json:"status"`
+	ServicePointID *string    `json:"service_point_id,omitempty"`
+	ClinicianID    *string    `json:"clinician_id,omitempty"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	EndedAt        *time.Time `json:"ended_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+type ObservationInput struct {
+	Code         string   `json:"code"`
+	ValueNumeric *float64 `json:"value_numeric,omitempty"`
+	ValueText    *string  `json:"value_text,omitempty"`
+	Unit         *string  `json:"unit,omitempty"`
+}
+type Observation struct {
+	ID           string    `json:"id"`
+	PatientID    string    `json:"patient_id"`
+	VisitID      string    `json:"visit_id"`
+	Code         string    `json:"code"`
+	RecordedBy   string    `json:"recorded_by"`
+	EncounterID  *string   `json:"encounter_id,omitempty"`
+	ValueNumeric *float64  `json:"value_numeric,omitempty"`
+	ValueText    *string   `json:"value_text,omitempty"`
+	Unit         *string   `json:"unit,omitempty"`
+	ObservedAt   time.Time `json:"observed_at"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type ClinicalNote struct {
+	ID            string    `json:"id"`
+	PatientID     string    `json:"patient_id"`
+	VisitID       string    `json:"visit_id"`
+	NoteType      string    `json:"note_type"`
+	Body          string    `json:"body"`
+	AuthoredBy    string    `json:"authored_by"`
+	EncounterID   *string   `json:"encounter_id,omitempty"`
+	AmendedFromID *string   `json:"amended_from_id,omitempty"`
+	AuthoredAt    time.Time `json:"authored_at"`
+}
+type Diagnosis struct {
+	ID          string    `json:"id"`
+	PatientID   string    `json:"patient_id"`
+	VisitID     string    `json:"visit_id"`
+	ConceptID   string    `json:"concept_id"`
+	Code        string    `json:"code"`
+	Display     string    `json:"display"`
+	Kind        string    `json:"kind"`
+	RecordedBy  string    `json:"recorded_by"`
+	EncounterID *string   `json:"encounter_id,omitempty"`
+	Note        *string   `json:"note,omitempty"`
+	RecordedAt  time.Time `json:"recorded_at"`
+}
+type Allergy struct {
+	ID         string    `json:"id"`
+	PatientID  string    `json:"patient_id"`
+	Allergen   string    `json:"allergen"`
+	Status     string    `json:"status"`
+	RecordedBy string    `json:"recorded_by"`
+	Reaction   *string   `json:"reaction,omitempty"`
+	Severity   *string   `json:"severity,omitempty"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+type VisitSummary struct {
+	Visit        Visit          `json:"visit"`
+	Encounters   []Encounter    `json:"encounters"`
+	Observations []Observation  `json:"observations"`
+	Notes        []ClinicalNote `json:"notes"`
+	Diagnoses    []Diagnosis    `json:"diagnoses"`
+	Allergies    []Allergy      `json:"allergies"`
+}
+type OutpatientCheckInRequest struct {
+	PatientID      string  `json:"patient_id"`
+	Reason         *string `json:"reason,omitempty"`
+	Override       bool    `json:"override,omitempty"`
+	OverrideReason *string `json:"override_reason,omitempty"`
+}
+type CreateEncounterRequest struct {
+	EncounterType  string  `json:"encounter_type"`
+	ServicePointID *string `json:"service_point_id,omitempty"`
+}
+type RecordObservationsRequest struct {
+	Observations []ObservationInput `json:"observations"`
+}
+type CreateNoteRequest struct {
+	EncounterID *string `json:"encounter_id,omitempty"`
+	NoteType    string  `json:"note_type"`
+	Body        string  `json:"body"`
+}
+type CreateDiagnosisRequest struct {
+	EncounterID *string `json:"encounter_id,omitempty"`
+	Code        string  `json:"code"`
+	Kind        string  `json:"kind"`
+	Note        *string `json:"note,omitempty"`
+}
+type CreateAllergyRequest struct {
+	Allergen string  `json:"allergen"`
+	Reaction *string `json:"reaction,omitempty"`
+	Severity *string `json:"severity,omitempty"`
+}
+type CompleteEncounterRequest struct {
+	ConsultationQueueID *string `json:"consultation_queue_id,omitempty"`
+}
