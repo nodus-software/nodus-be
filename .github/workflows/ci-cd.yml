@@ -1,0 +1,254 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "Immutable staged image (ghcr.io/becaris/nodus-be@sha256:...)"
+        required: true
+        type: string
+
+concurrency:
+  group: ci-cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/becaris/nodus-be
+
+jobs:
+  quality:
+    name: Quality gate
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: nodus_ci
+          POSTGRES_USER: nodus
+          POSTGRES_PASSWORD: nodus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nodus -d nodus_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [[ -n "${unformatted}" ]]; then
+            echo "The following files need gofmt:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      - name: Build commands
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./cmd/api ./cmd/migrate
+
+      - name: Apply migrations to a clean database
+        env:
+          MIGRATION_DB_URL: postgres://nodus:nodus@127.0.0.1:5432/nodus_ci?sslmode=disable
+        run: go run ./cmd/migrate
+
+      - name: Verify migrations are idempotent
+        env:
+          MIGRATION_DB_URL: postgres://nodus:nodus@127.0.0.1:5432/nodus_ci?sslmode=disable
+          PGPASSWORD: nodus
+        shell: bash
+        run: |
+          go run ./cmd/migrate
+          version="$(psql --host 127.0.0.1 --username nodus --dbname nodus_ci --tuples-only --no-align --command 'SELECT version FROM schema_migrations')"
+          test "${version}" = "12"
+
+  package:
+    name: Publish image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.image.outputs.image_ref }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE_NAME }}:main
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Becaris/nodus-be
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Export immutable image reference
+        id: image
+        shell: bash
+        run: echo "image_ref=${IMAGE_NAME}@${{ steps.build.outputs.digest }}" >> "${GITHUB_OUTPUT}"
+
+  deploy_staging:
+    name: Deploy staging
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out deployment assets
+        uses: actions/checkout@v7
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ vars.STAGING_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          install -m 700 -d "${HOME}/.ssh"
+          install -m 600 /dev/null "${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+
+      - name: Upload deployment assets
+        env:
+          DEPLOY_HOST: ${{ vars.STAGING_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.STAGING_DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH }}
+        shell: bash
+        run: |
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          printf -v prepare_command 'install -d -m 750 %q' "${DEPLOY_PATH}"
+          ssh "${ssh_args[@]}" "${target}" "${prepare_command}"
+          scp "${ssh_args[@]}" deploy/compose.production.yml deploy/deploy.sh "${target}:${DEPLOY_PATH}/"
+          printf -v mode_command 'chmod 0755 %q/deploy.sh' "${DEPLOY_PATH}"
+          ssh "${ssh_args[@]}" "${target}" "${mode_command}"
+
+      - name: Deploy immutable image
+        env:
+          DEPLOY_HOST: ${{ vars.STAGING_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.STAGING_DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH }}
+          HEALTH_URL: ${{ vars.STAGING_HEALTH_URL }}
+          IMAGE_REF: ${{ needs.package.outputs.image_ref }}
+        shell: bash
+        run: |
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          printf -v deploy_command 'cd %q && ./deploy.sh %q %q' "${DEPLOY_PATH}" "${IMAGE_REF}" "${HEALTH_URL}"
+          ssh "${ssh_args[@]}" "${target}" "${deploy_command}"
+
+      - name: Record staged image
+        env:
+          IMAGE_REF: ${{ needs.package.outputs.image_ref }}
+        shell: bash
+        run: |
+          printf '## Staging deployment\n\nProduction image: `%s`\n' "${IMAGE_REF}" >> "${GITHUB_STEP_SUMMARY}"
+
+  deploy_production:
+    name: Deploy production
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out deployment assets
+        uses: actions/checkout@v7
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ vars.PRODUCTION_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          install -m 700 -d "${HOME}/.ssh"
+          install -m 600 /dev/null "${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+
+      - name: Upload deployment assets
+        env:
+          DEPLOY_HOST: ${{ vars.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.PRODUCTION_DEPLOY_PATH }}
+        shell: bash
+        run: |
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          printf -v prepare_command 'install -d -m 750 %q' "${DEPLOY_PATH}"
+          ssh "${ssh_args[@]}" "${target}" "${prepare_command}"
+          scp "${ssh_args[@]}" deploy/compose.production.yml deploy/deploy.sh "${target}:${DEPLOY_PATH}/"
+          printf -v mode_command 'chmod 0755 %q/deploy.sh' "${DEPLOY_PATH}"
+          ssh "${ssh_args[@]}" "${target}" "${mode_command}"
+
+      - name: Deploy immutable image
+        env:
+          DEPLOY_HOST: ${{ vars.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.PRODUCTION_DEPLOY_PATH }}
+          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+        shell: bash
+        run: |
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          printf -v deploy_command 'cd %q && ./deploy.sh %q %q' "${DEPLOY_PATH}" "${IMAGE_REF}" "${HEALTH_URL}"
+          ssh "${ssh_args[@]}" "${target}" "${deploy_command}"

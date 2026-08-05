@@ -1,0 +1,17 @@
+.git
+.github
+.agents
+.codex
+.env
+*.env
+logs
+tmp
+coverage.*
+*.out
+*.test
+Dockerfile*
+docker-compose*.yml
+docs
+static/docs
+tests
+email-preview

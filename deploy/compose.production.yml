@@ -1,0 +1,43 @@
+name: nodus
+
+services:
+  api:
+    image: ${IMAGE_REF:?IMAGE_REF must be an immutable GHCR digest}
+    container_name: nodus-api
+    env_file:
+      - .env
+    environment:
+      APP_PORT: "8080"
+      # The schema-owner credential is only exposed to the one-off migrator.
+      MIGRATION_DB_URL: ""
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    volumes:
+      - nodus_logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
+
+  migrate:
+    image: ${IMAGE_REF:?IMAGE_REF must be an immutable GHCR digest}
+    entrypoint: ["/app/migrate"]
+    environment:
+      MIGRATION_DB_URL: ${MIGRATION_DB_URL:?MIGRATION_DB_URL must be set in the host .env file}
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    profiles: ["tools"]
+
+volumes:
+  nodus_logs:
