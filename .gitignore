@@ -33,6 +33,8 @@ logs/
 # air live-reload build output
 tmp/
 
-# Editor/IDE
+# Editor/IDE/Agents
  .idea/
  .vscode/
+ .claude/
+ .codex/
