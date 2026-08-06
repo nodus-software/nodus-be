@@ -29,6 +29,11 @@ func (s *Service) CreateResource(c context.Context, actor, k string, q CreateRes
 	if !resourceKinds[k] || strings.TrimSpace(q.Code) == "" || strings.TrimSpace(q.Name) == "" {
 		return nil, ErrInvalidInput
 	}
+	// A bed is always a child of a room. Its ward is derived from that room by
+	// the repository so callers cannot create a mismatched ward/room hierarchy.
+	if k == "beds" && (q.RoomID == nil || strings.TrimSpace(*q.RoomID) == "") {
+		return nil, ErrInvalidInput
+	}
 	id, e := utility.GenerateUUID()
 	if e != nil {
 		return nil, e
@@ -39,6 +44,83 @@ func (s *Service) CreateResource(c context.Context, actor, k string, q CreateRes
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_configuration_created", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"kind": k}})
 	}
 	return x, e
+}
+
+func (s *Service) UpdateResource(c context.Context, actor, k, id string, q UpdateResourceRequest) (*Resource, error) {
+	if !resourceKinds[k] || id == "" || (q.Code == nil && q.Name == nil && q.Kind == nil) {
+		return nil, ErrInvalidInput
+	}
+	if q.Code != nil {
+		v := strings.TrimSpace(*q.Code)
+		if v == "" {
+			return nil, ErrInvalidInput
+		}
+		q.Code = &v
+	}
+	if q.Name != nil {
+		v := strings.TrimSpace(*q.Name)
+		if v == "" {
+			return nil, ErrInvalidInput
+		}
+		q.Name = &v
+	}
+	if q.Kind != nil {
+		if k != "service-points" || strings.TrimSpace(*q.Kind) == "" {
+			return nil, ErrInvalidInput
+		}
+		v := strings.TrimSpace(*q.Kind)
+		q.Kind = &v
+	}
+	x, err := s.repo.UpdateResource(c, k, id, q)
+	if err == nil && s.audit != nil {
+		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_configuration_updated", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"kind": k}})
+	}
+	return x, err
+}
+
+func (s *Service) DeactivationImpact(c context.Context, k, id string) (*DeactivationImpact, error) {
+	if !resourceKinds[k] || id == "" {
+		return nil, ErrInvalidInput
+	}
+	return s.repo.DeactivationImpact(c, k, id)
+}
+
+func (s *Service) DeactivateResource(c context.Context, actor, k, id string, q DeactivateResourceRequest) (*ResourceLifecycleResult, error) {
+	if !resourceKinds[k] || id == "" {
+		return nil, ErrInvalidInput
+	}
+	q.Reason = strings.TrimSpace(q.Reason)
+	if q.Reason == "" {
+		return nil, ErrReasonRequired
+	}
+	impact, err := s.repo.DeactivationImpact(c, k, id)
+	if err != nil {
+		return nil, err
+	}
+	if len(impact.OperationalBlockers) > 0 {
+		return nil, &LifecycleConflictError{Cause: ErrOperationalUse, Impact: impact}
+	}
+	if len(impact.ActiveDescendants) > 0 && !q.Cascade {
+		return nil, &LifecycleConflictError{Cause: ErrActiveDescendants, Impact: impact}
+	}
+	x, err := s.repo.DeactivateResource(c, k, id, q.Cascade)
+	if err == nil && s.audit != nil {
+		for _, ref := range x.Affected {
+			_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_configuration_deactivated", Result: audit.ResultSuccess, TargetResource: ref.ID, Metadata: map[string]any{"kind": ref.Kind, "reason": q.Reason, "cascade": q.Cascade, "root_id": id, "root_kind": k}})
+		}
+	}
+	return x, err
+}
+
+func (s *Service) ReactivateResource(c context.Context, actor, k, id string) (*Resource, error) {
+	if !resourceKinds[k] || id == "" {
+		return nil, ErrInvalidInput
+	}
+	x, err := s.repo.ReactivateResource(c, k, id)
+	if err == nil && s.audit != nil {
+		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_configuration_reactivated", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"kind": k}})
+	}
+	return x, err
 }
 func (s *Service) CreateVisit(c context.Context, actor string, q CreateVisitRequest) (*Visit, error) {
 	if q.PatientID == "" || !map[string]bool{"test": true, "outpatient": true, "emergency": true, "specialty": true}[q.VisitType] {

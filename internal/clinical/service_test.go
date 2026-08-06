@@ -12,6 +12,107 @@ type transitionRepo struct {
 	called bool
 }
 
+type resourceRepo struct {
+	Repository
+	created     *Resource
+	impact      *DeactivationImpact
+	deactivated bool
+	cascade     bool
+}
+
+func (r *resourceRepo) CreateResource(_ context.Context, _ string, resource Resource) (*Resource, error) {
+	r.created = &resource
+	return &resource, nil
+}
+
+func (r *resourceRepo) DeactivationImpact(context.Context, string, string) (*DeactivationImpact, error) {
+	return r.impact, nil
+}
+
+func (r *resourceRepo) DeactivateResource(_ context.Context, _ string, _ string, cascade bool) (*ResourceLifecycleResult, error) {
+	r.deactivated = true
+	r.cascade = cascade
+	return &ResourceLifecycleResult{Root: r.impact.Root}, nil
+}
+
+func TestCreateBedRequiresRoom(t *testing.T) {
+	r := &resourceRepo{}
+	s := NewService(r, noopAudit{})
+
+	_, err := s.CreateResource(context.Background(), "actor", "beds", CreateResourceRequest{Code: "B-1", Name: "Bed 1"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected room requirement validation, got %v", err)
+	}
+	if r.created != nil {
+		t.Fatal("repository should not be called without a room")
+	}
+}
+
+func TestCreateBedPassesRoomToRepository(t *testing.T) {
+	r := &resourceRepo{}
+	s := NewService(r, noopAudit{})
+	roomID := "room-1"
+
+	_, err := s.CreateResource(context.Background(), "actor", "beds", CreateResourceRequest{Code: "B-1", Name: "Bed 1", RoomID: &roomID})
+	if err != nil {
+		t.Fatalf("create bed: %v", err)
+	}
+	if r.created == nil || r.created.RoomID == nil || *r.created.RoomID != roomID {
+		t.Fatalf("expected room %q to reach repository, got %#v", roomID, r.created)
+	}
+}
+
+func TestDeactivateRequiresReason(t *testing.T) {
+	r := &resourceRepo{}
+	s := NewService(r, noopAudit{})
+	_, err := s.DeactivateResource(context.Background(), "actor", "wards", "ward", DeactivateResourceRequest{})
+	if !errors.Is(err, ErrReasonRequired) {
+		t.Fatalf("expected reason requirement, got %v", err)
+	}
+}
+
+func TestDeactivateBlocksActiveChildrenWithoutCascade(t *testing.T) {
+	r := &resourceRepo{impact: &DeactivationImpact{
+		Root:              ResourceReference{Kind: "wards", ID: "ward", Name: "Ward"},
+		ActiveDescendants: []ResourceReference{{Kind: "rooms", ID: "room", Name: "Room"}},
+	}}
+	s := NewService(r, noopAudit{})
+	_, err := s.DeactivateResource(context.Background(), "actor", "wards", "ward", DeactivateResourceRequest{Reason: "Closing", Cascade: false})
+	if !errors.Is(err, ErrActiveDescendants) {
+		t.Fatalf("expected active descendant conflict, got %v", err)
+	}
+	if r.deactivated {
+		t.Fatal("repository must not deactivate without explicit cascade")
+	}
+}
+
+func TestDeactivateExplicitCascade(t *testing.T) {
+	r := &resourceRepo{impact: &DeactivationImpact{
+		Root:              ResourceReference{Kind: "wards", ID: "ward", Name: "Ward"},
+		ActiveDescendants: []ResourceReference{{Kind: "rooms", ID: "room", Name: "Room"}},
+	}}
+	s := NewService(r, noopAudit{})
+	_, err := s.DeactivateResource(context.Background(), "actor", "wards", "ward", DeactivateResourceRequest{Reason: "Closing", Cascade: true})
+	if err != nil {
+		t.Fatalf("deactivate hierarchy: %v", err)
+	}
+	if !r.deactivated || !r.cascade {
+		t.Fatal("expected explicit cascade to reach repository")
+	}
+}
+
+func TestDeactivateBlocksOperationalUseEvenWithCascade(t *testing.T) {
+	r := &resourceRepo{impact: &DeactivationImpact{
+		Root:                ResourceReference{Kind: "rooms", ID: "room", Name: "Room"},
+		OperationalBlockers: []OperationalBlocker{{Type: "bed_occupied", Count: 1}},
+	}}
+	s := NewService(r, noopAudit{})
+	_, err := s.DeactivateResource(context.Background(), "actor", "rooms", "room", DeactivateResourceRequest{Reason: "Closing", Cascade: true})
+	if !errors.Is(err, ErrOperationalUse) {
+		t.Fatalf("expected operational blocker, got %v", err)
+	}
+}
+
 func (r *transitionRepo) GetQueueEntry(context.Context, string) (*QueueEntry, error) {
 	x := r.entry
 	return &x, nil

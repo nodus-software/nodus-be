@@ -5,6 +5,10 @@ import "context"
 type Repository interface {
 	ListResources(context.Context, string) ([]Resource, error)
 	CreateResource(context.Context, string, Resource) (*Resource, error)
+	UpdateResource(context.Context, string, string, UpdateResourceRequest) (*Resource, error)
+	DeactivationImpact(context.Context, string, string) (*DeactivationImpact, error)
+	DeactivateResource(context.Context, string, string, bool) (*ResourceLifecycleResult, error)
+	ReactivateResource(context.Context, string, string) (*Resource, error)
 	CreateVisit(context.Context, Visit) (*Visit, error)
 	GetVisit(context.Context, string) (*Visit, error)
 	ApplyVisitRouting(context.Context, Visit) error
