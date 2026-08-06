@@ -76,6 +76,45 @@ type CreateResourceRequest struct {
 	ServicePointID *string `json:"service_point_id,omitempty"`
 	Kind           *string `json:"kind,omitempty"`
 }
+
+type UpdateResourceRequest struct {
+	Code *string `json:"code,omitempty"`
+	Name *string `json:"name,omitempty"`
+	Kind *string `json:"kind,omitempty"`
+}
+
+type DeactivateResourceRequest struct {
+	Reason  string `json:"reason"`
+	Cascade bool   `json:"cascade"`
+}
+
+type ResourceReference struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type OperationalBlocker struct {
+	Type       string `json:"type"`
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Name       string `json:"name"`
+	Count      int    `json:"count"`
+	Message    string `json:"message"`
+}
+
+type DeactivationImpact struct {
+	Root                ResourceReference    `json:"root"`
+	ActiveDescendants   []ResourceReference  `json:"active_descendants"`
+	DescendantCounts    map[string]int       `json:"descendant_counts"`
+	OperationalBlockers []OperationalBlocker `json:"operational_blockers"`
+	CascadeAllowed      bool                 `json:"cascade_allowed"`
+}
+
+type ResourceLifecycleResult struct {
+	Root     ResourceReference   `json:"root"`
+	Affected []ResourceReference `json:"affected"`
+}
 type CreateVisitRequest struct {
 	PatientID string  `json:"patient_id"`
 	VisitType string  `json:"visit_type"`

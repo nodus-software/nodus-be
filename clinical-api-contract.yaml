@@ -20,9 +20,48 @@ paths:
         '200': { description: Resource list, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceListResponse' } } } }
     post:
       summary: Create a configured clinical resource
+      description: Rooms require `ward_id` and their codes are unique within that ward. Beds require `room_id`, their `ward_id` is derived from the room, and their codes are unique within that room.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateResource' } } } }
       responses:
         '201': { description: Created resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+  /clinical/config/{kind}/{resourceId}:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues] } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      summary: Edit a clinical configuration without changing its parent
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateResource' } } } }
+      responses:
+        '200': { description: Updated resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /clinical/config/{kind}/{resourceId}/deactivation-impact:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Preview active descendants and operational deactivation blockers
+      responses:
+        '200': { description: Deactivation impact, content: { application/json: { schema: { $ref: '#/components/schemas/DeactivationImpactResponse' } } } }
+  /clinical/config/{kind}/{resourceId}/deactivate:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Deactivate one configuration or explicitly cascade through its hierarchy
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeactivateResource' } } } }
+      responses:
+        '200': { description: Deactivation result }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/config/{kind}/{resourceId}/reactivate:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Reactivate one configuration when its parent is active
+      responses:
+        '200': { description: Reactivated resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
   /clinical/visits:
     post:
       summary: Create a visit and apply automatic routing rules
@@ -173,6 +212,45 @@ components:
         room_id: { type: string, format: uuid }
         service_point_id: { type: string, format: uuid }
         kind: { type: string }
+    UpdateResource:
+      type: object
+      minProperties: 1
+      properties:
+        code: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        kind: { type: string, minLength: 1, description: Service points only }
+    DeactivateResource:
+      type: object
+      required: [reason, cascade]
+      properties:
+        reason: { type: string, minLength: 1 }
+        cascade: { type: boolean }
+    ResourceReference:
+      type: object
+      required: [kind, id, name]
+      properties:
+        kind: { type: string }
+        id: { type: string, format: uuid }
+        name: { type: string }
+    OperationalBlocker:
+      type: object
+      required: [type, kind, resource_id, name, count, message]
+      properties:
+        type: { type: string }
+        kind: { type: string }
+        resource_id: { type: string, format: uuid }
+        name: { type: string }
+        count: { type: integer, minimum: 1 }
+        message: { type: string }
+    DeactivationImpact:
+      type: object
+      required: [root, active_descendants, descendant_counts, operational_blockers, cascade_allowed]
+      properties:
+        root: { $ref: '#/components/schemas/ResourceReference' }
+        active_descendants: { type: array, items: { $ref: '#/components/schemas/ResourceReference' } }
+        descendant_counts: { type: object, additionalProperties: { type: integer } }
+        operational_blockers: { type: array, items: { $ref: '#/components/schemas/OperationalBlocker' } }
+        cascade_allowed: { type: boolean }
     Visit:
       type: object
       required: [id, patient_id, visit_type, status, started_at, created_by, created_at]
@@ -273,6 +351,7 @@ components:
         target_queue_id: { type: string, format: uuid }
         priority: { type: integer, minimum: 0, maximum: 100 }
     ResourceResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
+    DeactivationImpactResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
     ResourceListResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
     VisitResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }
     QueueEntryResponse: { allOf: [{ $ref: '#/components/schemas/Envelope' }] }

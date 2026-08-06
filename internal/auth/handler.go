@@ -223,14 +223,21 @@ func (h *Handler) LoginMFA(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
+	requestID, _ := middleware.RequestIDFromContext(r.Context())
 	cookie, err := r.Cookie(h.refreshCookie.Name)
 	if err != nil || cookie.Value == "" {
+		h.log.Warning("refresh rejected", "reason", "cookie_missing", "request_id", requestID)
 		h.clearRefreshCookie(w)
 		h.writeError(w, ErrRefreshTokenInvalid)
 		return
 	}
 	pair, err := h.service.Refresh(r.Context(), cookie.Value)
 	if err != nil {
+		reason := "invalid"
+		if errors.Is(err, ErrRefreshTokenRevoked) {
+			reason = "revoked"
+		}
+		h.log.Warning("refresh rejected", "reason", reason, "request_id", requestID)
 		// A revoked token may be a harmless concurrent replay after another tab has
 		// already rotated the shared cookie. Do not let the losing response erase the
 		// newly issued cookie. Unknown/expired tokens are still cleared.

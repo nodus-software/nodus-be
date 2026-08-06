@@ -32,10 +32,13 @@ func bind[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return q, true
 }
 func (h *Handler) fail(w http.ResponseWriter, e error) {
+	var lifecycle *LifecycleConflictError
 	switch {
 	case errors.Is(e, ErrNotFound):
 		response.NotFound(w, e.Error())
-	case errors.Is(e, ErrConflict), errors.Is(e, ErrActiveVisit):
+	case errors.As(e, &lifecycle):
+		response.ErrorWithDetails(w, http.StatusConflict, "CONFIGURATION_CONFLICT", e.Error(), lifecycle.Impact)
+	case errors.Is(e, ErrConflict), errors.Is(e, ErrActiveVisit), errors.Is(e, ErrInactiveParent):
 		response.Conflict(w, e.Error())
 	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired), errors.Is(e, ErrVisitIncomplete):
 		response.Validation(w, map[string]string{"error": e.Error()})
@@ -72,6 +75,65 @@ func (h *Handler) CreateResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Created(w, x)
+}
+
+func (h *Handler) UpdateResource(w http.ResponseWriter, r *http.Request) {
+	a, ok := actor(r)
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	q, ok := bind[UpdateResourceRequest](w, r)
+	if !ok {
+		return
+	}
+	x, err := h.service.UpdateResource(r.Context(), a, chi.URLParam(r, "kind"), chi.URLParam(r, "resourceId"), q)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	response.OK(w, x)
+}
+
+func (h *Handler) DeactivationImpact(w http.ResponseWriter, r *http.Request) {
+	x, err := h.service.DeactivationImpact(r.Context(), chi.URLParam(r, "kind"), chi.URLParam(r, "resourceId"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	response.OK(w, x)
+}
+
+func (h *Handler) DeactivateResource(w http.ResponseWriter, r *http.Request) {
+	a, ok := actor(r)
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	q, ok := bind[DeactivateResourceRequest](w, r)
+	if !ok {
+		return
+	}
+	x, err := h.service.DeactivateResource(r.Context(), a, chi.URLParam(r, "kind"), chi.URLParam(r, "resourceId"), q)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	response.OK(w, x)
+}
+
+func (h *Handler) ReactivateResource(w http.ResponseWriter, r *http.Request) {
+	a, ok := actor(r)
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	x, err := h.service.ReactivateResource(r.Context(), a, chi.URLParam(r, "kind"), chi.URLParam(r, "resourceId"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	response.OK(w, x)
 }
 func (h *Handler) CreateVisit(w http.ResponseWriter, r *http.Request) {
 	a, ok := actor(r)
