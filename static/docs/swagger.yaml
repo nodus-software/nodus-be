@@ -53,6 +53,8 @@ tags:
   - name: Roles
   - name: AuditLog
   - name: Patient Management
+  - name: Configuration
+  - name: Clinical
 
 paths:
 
@@ -1356,6 +1358,237 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /clinical/config/{kind}:
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues] }
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: List configured clinical resources
+      responses:
+        '200': { description: Resource list, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceListResponse' } } } }
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Create a configured clinical resource
+      description: Rooms require `ward_id` and their codes are unique within that ward. Beds require `room_id`, their `ward_id` is derived from the room, and their codes are unique within that room.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateResource' } } } }
+      responses:
+        '201': { description: Created resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+  /clinical/config/{kind}/{resourceId}:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues] } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Edit a clinical configuration without changing its parent
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateResource' } } } }
+      responses:
+        '200': { description: Updated resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /clinical/config/{kind}/{resourceId}/deactivation-impact:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Preview active descendants and operational deactivation blockers
+      responses:
+        '200': { description: Deactivation impact, content: { application/json: { schema: { $ref: '#/components/schemas/DeactivationImpactResponse' } } } }
+  /clinical/config/{kind}/{resourceId}/deactivate:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Deactivate one configuration or explicitly cascade through its hierarchy
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeactivateResource' } } } }
+      responses:
+        '200': { description: Deactivation result }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/config/{kind}/{resourceId}/reactivate:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string } }
+      - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Reactivate one configuration when its parent is active
+      responses:
+        '200': { description: Reactivated resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /clinical/visits:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Create a visit and apply automatic routing rules
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateVisit' } } } }
+      responses:
+        '201': { description: Created visit, content: { application/json: { schema: { $ref: '#/components/schemas/VisitResponse' } } } }
+  /clinical/visits/{visitId}:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Get a visit
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Visit, content: { application/json: { schema: { $ref: '#/components/schemas/VisitResponse' } } } }
+  /clinical/outpatient/check-ins:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Check a patient into outpatient care and route the visit to triage
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/OutpatientCheckIn' } } } }
+      responses:
+        '201': { description: Created outpatient visit }
+        '409': { description: Patient already has an active outpatient visit }
+  /clinical/outpatient/check-ins/override:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Authorized, audited override of the active outpatient visit safeguard
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/OutpatientCheckInOverride' } } } }
+      responses: { '201': { description: Created outpatient visit }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/outpatient/visits:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: List today's outpatient visits
+      parameters: [{ name: status, in: query, schema: { type: string, enum: [active, completed, cancelled] } }]
+      responses: { '200': { description: Visit list } }
+  /clinical/visits/{visitId}/encounters:
+    parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: List visit encounters
+      responses: { '200': { description: Encounter list } }
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Start outpatient triage or consultation
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEncounter' } } } }
+      responses: { '201': { description: Started encounter }, '409': { $ref: '#/components/responses/Conflict' } }
+  /clinical/encounters/{encounterId}/observations:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Record a batch of observations on an active encounter
+      parameters: [{ name: encounterId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RecordObservations' } } } }
+      responses: { '201': { description: Recorded observations }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/encounters/{encounterId}/complete:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Complete an encounter; triage completion atomically routes to consultation
+      parameters: [{ name: encounterId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CompleteEncounter' } } } }
+      responses: { '200': { description: Completed encounter }, '409': { $ref: '#/components/responses/Conflict' } }
+  /clinical/visits/{visitId}/notes:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Add an authored clinical note to an active visit
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateNote' } } } }
+      responses: { '201': { description: Created note } }
+  /clinical/visits/{visitId}/diagnoses:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Add an ICD-10 diagnosis to an active visit
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateDiagnosis' } } } }
+      responses: { '201': { description: Created diagnosis }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/patients/{patientId}/allergies:
+    parameters: [{ name: patientId, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: List patient allergies
+      responses: { '200': { description: Allergy list } }
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Record a patient allergy
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAllergy' } } } }
+      responses: { '201': { description: Created allergy } }
+  /clinical/visits/{visitId}/complete:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Complete an outpatient visit after consultation and final diagnosis
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Completed visit }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/visits/{visitId}/summary:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Get the assembled visit, encounter, observation, note, diagnosis, and allergy summary
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Visit summary } }
+  /clinical/queues/{queueId}/entries:
+    parameters: [{ name: queueId, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: List active entries on a queue board
+      responses:
+        '200': { description: Queue entries, content: { application/json: { schema: { $ref: '#/components/schemas/QueueEntryListResponse' } } } }
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Add a work item to a queue manually
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Enqueue' } } } }
+      responses:
+        '201': { description: Queue entry, content: { application/json: { schema: { $ref: '#/components/schemas/QueueEntryResponse' } } } }
+  /clinical/queue-entries/{entryId}/transition:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Move or change the state of a queue entry
+      parameters: [{ name: entryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransitionQueueEntry' } } } }
+      responses:
+        '200': { description: Updated queue entry, content: { application/json: { schema: { $ref: '#/components/schemas/QueueEntryResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/queue-entries/{entryId}/history:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Get complete manual and automatic movement history
+      parameters: [{ name: entryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Movement history }
+  /clinical/routing-rules:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: List queue routing rules
+      responses: { '200': { description: Routing rules } }
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Create a queue routing rule
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateRoutingRule' } } } }
+      responses: { '201': { description: Created routing rule } }
+  /clinical/terminology/icd10:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Search the active ICD-10 release
+      parameters: [{ name: q, in: query, required: true, schema: { type: string, minLength: 2 } }]
+      responses: { '200': { description: Matching concepts } }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1428,6 +1661,177 @@ components:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   schemas:
+    ClinicalResource:
+      type: object
+      required: [id, code, name, active, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        department_id: { type: string, nullable: true, format: uuid }
+        ward_id: { type: string, nullable: true, format: uuid }
+        room_id: { type: string, nullable: true, format: uuid }
+        service_point_id: { type: string, nullable: true, format: uuid }
+        kind: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    CreateResource:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        department_id: { type: string, format: uuid }
+        ward_id: { type: string, format: uuid }
+        room_id: { type: string, format: uuid }
+        service_point_id: { type: string, format: uuid }
+        kind: { type: string }
+    UpdateResource:
+      type: object
+      minProperties: 1
+      properties:
+        code: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        kind: { type: string, minLength: 1, description: Service points only }
+    DeactivateResource:
+      type: object
+      required: [reason, cascade]
+      properties:
+        reason: { type: string, minLength: 1 }
+        cascade: { type: boolean }
+    ResourceReference:
+      type: object
+      required: [kind, id, name]
+      properties:
+        kind: { type: string }
+        id: { type: string, format: uuid }
+        name: { type: string }
+    OperationalBlocker:
+      type: object
+      required: [type, kind, resource_id, name, count, message]
+      properties:
+        type: { type: string }
+        kind: { type: string }
+        resource_id: { type: string, format: uuid }
+        name: { type: string }
+        count: { type: integer, minimum: 1 }
+        message: { type: string }
+    DeactivationImpact:
+      type: object
+      required: [root, active_descendants, descendant_counts, operational_blockers, cascade_allowed]
+      properties:
+        root: { $ref: '#/components/schemas/ResourceReference' }
+        active_descendants: { type: array, items: { $ref: '#/components/schemas/ResourceReference' } }
+        descendant_counts: { type: object, additionalProperties: { type: integer } }
+        operational_blockers: { type: array, items: { $ref: '#/components/schemas/OperationalBlocker' } }
+        cascade_allowed: { type: boolean }
+    Visit:
+      type: object
+      required: [id, patient_id, visit_type, status, started_at, created_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        patient_id: { type: string, format: uuid }
+        visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
+        status: { type: string, enum: [planned, active, completed, cancelled] }
+        reason: { type: string, nullable: true }
+        started_at: { type: string, format: date-time }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+    CreateVisit:
+      type: object
+      required: [patient_id, visit_type]
+      properties:
+        patient_id: { type: string, format: uuid }
+        visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
+        reason: { type: string }
+    OutpatientCheckIn:
+      type: object
+      required: [patient_id]
+      properties: { patient_id: { type: string, format: uuid }, reason: { type: string } }
+    OutpatientCheckInOverride:
+      type: object
+      required: [patient_id, override_reason]
+      properties: { patient_id: { type: string, format: uuid }, reason: { type: string }, override_reason: { type: string, minLength: 1 } }
+    CreateEncounter:
+      type: object
+      required: [encounter_type]
+      properties: { encounter_type: { type: string, enum: [triage, consultation] }, service_point_id: { type: string, format: uuid } }
+    ObservationInput:
+      type: object
+      required: [code]
+      properties: { code: { type: string }, value_numeric: { type: number }, value_text: { type: string }, unit: { type: string } }
+      description: Exactly one of value_numeric and value_text is required.
+    RecordObservations:
+      type: object
+      required: [observations]
+      properties: { observations: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ObservationInput' } } }
+    CompleteEncounter:
+      type: object
+      properties: { consultation_queue_id: { type: string, format: uuid, description: Required when completing triage } }
+    CreateNote:
+      type: object
+      required: [note_type, body]
+      properties: { encounter_id: { type: string, format: uuid }, note_type: { type: string }, body: { type: string, minLength: 1 } }
+    CreateDiagnosis:
+      type: object
+      required: [code, kind]
+      properties: { encounter_id: { type: string, format: uuid }, code: { type: string }, kind: { type: string, enum: [provisional, final, secondary] }, note: { type: string } }
+    CreateAllergy:
+      type: object
+      required: [allergen]
+      properties: { allergen: { type: string }, reaction: { type: string }, severity: { type: string, enum: [mild, moderate, severe] } }
+    QueueEntry:
+      type: object
+      required: [id, queue_id, subject_type, subject_id, patient_id, status, priority, joined_at]
+      properties:
+        id: { type: string, format: uuid }
+        queue_id: { type: string, format: uuid }
+        queue_name: { type: string }
+        subject_type: { type: string, enum: [visit, admission, order] }
+        subject_id: { type: string, format: uuid }
+        patient_id: { type: string, format: uuid }
+        patient_name: { type: string }
+        patient_mrn: { type: string }
+        status: { type: string, enum: [waiting, called, in_service, paused, transferred, completed, cancelled, no_show] }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        acuity: { type: integer, nullable: true, minimum: 1, maximum: 5 }
+        joined_at: { type: string, format: date-time }
+    Enqueue:
+      type: object
+      required: [subject_type, subject_id, patient_id, priority]
+      properties:
+        subject_type: { type: string, enum: [visit, admission, order] }
+        subject_id: { type: string, format: uuid }
+        patient_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        acuity: { type: integer, minimum: 1, maximum: 5 }
+        reason: { type: string }
+    TransitionQueueEntry:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [waiting, called, in_service, paused, transferred, completed, cancelled, no_show] }
+        queue_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        position: { type: integer }
+        reason: { type: string }
+    CreateRoutingRule:
+      type: object
+      required: [name, event_type, target_queue_id, priority]
+      properties:
+        name: { type: string }
+        event_type: { type: string, enum: [visit.created] }
+        visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
+        target_queue_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+    ResourceResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
+    DeactivationImpactResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
+    ResourceListResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
+    VisitResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
+    QueueEntryResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
+    QueueEntryListResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
+
     APIError:
       type: object
       required: [code, message]
