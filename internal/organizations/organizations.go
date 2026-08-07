@@ -142,6 +142,9 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 	if err = seedAllergens(ctx, tx); err != nil {
 		return nil, err
 	}
+	if err = seedClinicalTemplates(ctx, tx); err != nil {
+		return nil, err
+	}
 	auditID, _ := utility.GenerateUUID()
 	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,tenant_id,user_id,action,result) VALUES($1,$2,NULL,'organization_registered','success')`, auditID, tenantID); err != nil {
 		return nil, err
@@ -207,6 +210,38 @@ func seedAllergens(ctx context.Context, tx interface {
 }) error {
 	for _, x := range clinical.DefaultAllergens {
 		if _, err := tx.Exec(ctx, `INSERT INTO allergen_catalogue(id,code,name,category,aliases) VALUES(gen_random_uuid(),$1,$2,$3,$4)`, x.Code, x.Name, x.Category, x.Aliases); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedClinicalTemplates(ctx context.Context, tx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}) error {
+	for _, x := range []struct {
+		code, name, description, encounterType string
+		definition                             clinical.TemplateDefinition
+	}{
+		{"outpatient-triage", "Outpatient Triage", "Core outpatient triage observations", "triage", clinical.DefaultTriageTemplate},
+		{"outpatient-consultation", "Outpatient Consultation", "Practical outpatient consultation note", "consultation", clinical.DefaultConsultationTemplate},
+	} {
+		templateID, err := utility.GenerateUUID()
+		if err != nil {
+			return err
+		}
+		versionID, err := utility.GenerateUUID()
+		if err != nil {
+			return err
+		}
+		definition, err := json.Marshal(x.definition)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO clinical_templates(id,code,name,description,encounter_type,is_default) VALUES($1,$2,$3,$4,$5,true)`, templateID, x.code, x.name, x.description, x.encounterType); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO clinical_template_versions(id,template_id,version,status,definition,published_at) VALUES($1,$2,1,'published',$3,now())`, versionID, templateID, definition); err != nil {
 			return err
 		}
 	}

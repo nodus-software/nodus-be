@@ -22,6 +22,8 @@ type outpatientRepo struct {
 	observations        []Observation
 	allergen            *Allergen
 	allergy             *Allergy
+	form                *EncounterForm
+	formCreated         bool
 	completeVisitCalled bool
 }
 
@@ -55,6 +57,17 @@ func (r *outpatientRepo) GetVisit(context.Context, string) (*Visit, error) {
 }
 func (r *outpatientRepo) GetEncounter(context.Context, string) (*Encounter, error) {
 	return r.encounter, nil
+}
+func (r *outpatientRepo) GetEncounterForm(context.Context, string) (*EncounterForm, error) {
+	if r.form != nil {
+		return r.form, nil
+	}
+	return &EncounterForm{Status: "submitted"}, nil
+}
+func (r *outpatientRepo) CreateEncounterWithForm(_ context.Context, x Encounter, formID, actor string) (*Encounter, error) {
+	r.encounter = &x
+	r.formCreated = true
+	return &x, nil
 }
 func (r *outpatientRepo) CreateObservations(_ context.Context, x []Observation) ([]Observation, error) {
 	r.observations = x
@@ -141,6 +154,25 @@ func TestCompleteTriageRequiresConsultationQueue(t *testing.T) {
 	_, err := s.CompleteEncounter(context.Background(), "actor", "enc", CompleteEncounterRequest{})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected consultation queue validation, got %v", err)
+	}
+}
+func TestCompleteEncounterRequiresSubmittedTemplate(t *testing.T) {
+	r := &outpatientRepo{encounter: &Encounter{ID: "enc", EncounterType: "consultation", Status: "in_progress"}, form: &EncounterForm{Status: "draft"}}
+	s := NewService(r, noopAudit{})
+	_, err := s.CompleteEncounter(context.Background(), "actor", "enc", CompleteEncounterRequest{})
+	if !errors.Is(err, ErrFormIncomplete) {
+		t.Fatalf("expected incomplete form validation, got %v", err)
+	}
+}
+func TestCreateEncounterPinsDefaultTemplateForm(t *testing.T) {
+	r := &outpatientRepo{}
+	s := NewService(r, noopAudit{})
+	x, err := s.CreateEncounter(context.Background(), "actor", "visit", CreateEncounterRequest{EncounterType: "consultation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x == nil || !r.formCreated {
+		t.Fatalf("expected encounter and form, got encounter=%#v form=%v", x, r.formCreated)
 	}
 }
 func TestCompleteVisitRequiresCompletedConsultation(t *testing.T) {

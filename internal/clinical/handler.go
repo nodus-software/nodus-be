@@ -33,14 +33,17 @@ func bind[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 }
 func (h *Handler) fail(w http.ResponseWriter, e error) {
 	var lifecycle *LifecycleConflictError
+	var formValidation *FormValidationError
 	switch {
 	case errors.Is(e, ErrNotFound):
 		response.NotFound(w, e.Error())
 	case errors.As(e, &lifecycle):
 		response.ErrorWithDetails(w, http.StatusConflict, "CONFIGURATION_CONFLICT", e.Error(), lifecycle.Impact)
+	case errors.As(e, &formValidation):
+		response.ErrorWithDetails(w, http.StatusUnprocessableEntity, "FORM_VALIDATION_FAILED", e.Error(), formValidation.Errors)
 	case errors.Is(e, ErrConflict), errors.Is(e, ErrActiveVisit), errors.Is(e, ErrInactiveParent):
 		response.Conflict(w, e.Error())
-	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired), errors.Is(e, ErrVisitIncomplete):
+	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired), errors.Is(e, ErrVisitIncomplete), errors.Is(e, ErrFormIncomplete):
 		response.Validation(w, map[string]string{"error": e.Error()})
 	default:
 		h.log.Error("clinical request failed", "error", e.Error())

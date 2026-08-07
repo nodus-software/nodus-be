@@ -166,17 +166,19 @@ type ObservationInput struct {
 	Unit         *string  `json:"unit,omitempty"`
 }
 type Observation struct {
-	ID           string    `json:"id"`
-	PatientID    string    `json:"patient_id"`
-	VisitID      string    `json:"visit_id"`
-	Code         string    `json:"code"`
-	RecordedBy   string    `json:"recorded_by"`
-	EncounterID  *string   `json:"encounter_id,omitempty"`
-	ValueNumeric *float64  `json:"value_numeric,omitempty"`
-	ValueText    *string   `json:"value_text,omitempty"`
-	Unit         *string   `json:"unit,omitempty"`
-	ObservedAt   time.Time `json:"observed_at"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	PatientID          string    `json:"patient_id"`
+	VisitID            string    `json:"visit_id"`
+	Code               string    `json:"code"`
+	RecordedBy         string    `json:"recorded_by"`
+	EncounterID        *string   `json:"encounter_id,omitempty"`
+	ValueNumeric       *float64  `json:"value_numeric,omitempty"`
+	ValueText          *string   `json:"value_text,omitempty"`
+	Unit               *string   `json:"unit,omitempty"`
+	ObservedAt         time.Time `json:"observed_at"`
+	CreatedAt          time.Time `json:"created_at"`
+	SourceFormID       *string   `json:"source_form_id,omitempty"`
+	SourceFormFieldKey *string   `json:"source_form_field_key,omitempty"`
 }
 type ClinicalNote struct {
 	ID            string    `json:"id"`
@@ -217,12 +219,13 @@ type Allergy struct {
 	IsCustom     bool      `json:"is_custom"`
 }
 type VisitSummary struct {
-	Visit        Visit          `json:"visit"`
-	Encounters   []Encounter    `json:"encounters"`
-	Observations []Observation  `json:"observations"`
-	Notes        []ClinicalNote `json:"notes"`
-	Diagnoses    []Diagnosis    `json:"diagnoses"`
-	Allergies    []Allergy      `json:"allergies"`
+	Visit        Visit           `json:"visit"`
+	Encounters   []Encounter     `json:"encounters"`
+	Observations []Observation   `json:"observations"`
+	Notes        []ClinicalNote  `json:"notes"`
+	Diagnoses    []Diagnosis     `json:"diagnoses"`
+	Allergies    []Allergy       `json:"allergies"`
+	Forms        []EncounterForm `json:"forms"`
 }
 type OutpatientCheckInRequest struct {
 	PatientID      string  `json:"patient_id"`

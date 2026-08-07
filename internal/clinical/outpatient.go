@@ -67,7 +67,11 @@ func (s *Service) CreateEncounter(c context.Context, actor, visitID string, q Cr
 		return nil, err
 	}
 	now := time.Now().UTC()
-	x, err := s.repo.CreateEncounter(c, Encounter{ID: id, VisitID: visitID, EncounterType: q.EncounterType, Status: "in_progress", ServicePointID: q.ServicePointID, ClinicianID: &actor, StartedAt: &now})
+	formID, err := utility.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+	x, err := s.repo.CreateEncounterWithForm(c, Encounter{ID: id, VisitID: visitID, EncounterType: q.EncounterType, Status: "in_progress", ServicePointID: q.ServicePointID, ClinicianID: &actor, StartedAt: &now}, formID, actor)
 	if err == nil && s.audit != nil {
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_encounter_started", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"type": q.EncounterType, "visit_id": visitID}})
 	}
@@ -117,6 +121,13 @@ func (s *Service) CompleteEncounter(c context.Context, actor, id string, q Compl
 	}
 	if e.EncounterType == "triage" && (q.ConsultationQueueID == nil || *q.ConsultationQueueID == "") {
 		return nil, ErrInvalidInput
+	}
+	form, err := s.repo.GetEncounterForm(c, id)
+	if err != nil {
+		return nil, err
+	}
+	if form.Status != "submitted" {
+		return nil, ErrFormIncomplete
 	}
 	x, err := s.repo.CompleteEncounter(c, id, actor, q.ConsultationQueueID)
 	if err == nil && s.audit != nil {
@@ -281,5 +292,9 @@ func (s *Service) VisitSummary(c context.Context, id string) (*VisitSummary, err
 	if e != nil {
 		return nil, e
 	}
-	return &VisitSummary{Visit: *v, Encounters: enc, Observations: obs, Notes: notes, Diagnoses: dx, Allergies: all}, nil
+	forms, e := s.repo.ListEncounterForms(c, id)
+	if e != nil {
+		return nil, e
+	}
+	return &VisitSummary{Visit: *v, Encounters: enc, Observations: obs, Notes: notes, Diagnoses: dx, Allergies: all, Forms: forms}, nil
 }

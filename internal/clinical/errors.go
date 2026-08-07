@@ -10,6 +10,7 @@ var (
 	ErrConflict          = errors.New("the clinical operation conflicts with current state")
 	ErrActiveVisit       = errors.New("patient already has an active outpatient visit")
 	ErrVisitIncomplete   = errors.New("outpatient visit has not completed consultation")
+	ErrFormIncomplete    = errors.New("encounter form has not been submitted")
 	ErrActiveDescendants = errors.New("active child configurations must be deactivated first")
 	ErrOperationalUse    = errors.New("configuration is currently in operational use")
 	ErrInactiveParent    = errors.New("the parent configuration must be active first")

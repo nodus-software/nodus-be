@@ -59,6 +59,24 @@ func scanEncounter(row pgx.Row) (*clinical.Encounter, error) {
 func (r *Repository) CreateEncounter(c context.Context, x clinical.Encounter) (*clinical.Encounter, error) {
 	return scanEncounter(r.exec(c).QueryRow(c, "INSERT INTO clinical_encounters(id,visit_id,service_point_id,encounter_type,status,clinician_id,started_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING "+encounterCols, x.ID, x.VisitID, x.ServicePointID, x.EncounterType, x.Status, x.ClinicianID, x.StartedAt))
 }
+func (r *Repository) CreateEncounterWithForm(c context.Context, x clinical.Encounter, formID, actor string) (*clinical.Encounter, error) {
+	row := r.exec(c).QueryRow(c, `WITH selected AS (
+		SELECT v.id AS version_id FROM clinical_templates t JOIN clinical_template_versions v ON v.template_id=t.id AND v.status='published'
+		WHERE t.encounter_type=$4 AND t.is_default AND t.archived_at IS NULL
+	), inserted_encounter AS (
+		INSERT INTO clinical_encounters(id,visit_id,service_point_id,encounter_type,status,clinician_id,started_at)
+		SELECT $1,$2,$3,$4,$5,$6,$7 FROM selected RETURNING id,visit_id,encounter_type,status,service_point_id,clinician_id,started_at,ended_at,created_at
+	), inserted_form AS (
+		INSERT INTO clinical_encounter_forms(id,encounter_id,template_version_id,saved_by)
+		SELECT $8,e.id,s.version_id,$9 FROM inserted_encounter e CROSS JOIN selected s RETURNING encounter_id
+	) SELECT e.id,e.visit_id,e.encounter_type::text,e.status::text,e.service_point_id,e.clinician_id,e.started_at,e.ended_at,e.created_at
+	FROM inserted_encounter e JOIN inserted_form f ON f.encounter_id=e.id`, x.ID, x.VisitID, x.ServicePointID, x.EncounterType, x.Status, x.ClinicianID, x.StartedAt, formID, actor)
+	created, err := scanEncounter(row)
+	if errors.Is(err, clinical.ErrNotFound) {
+		return nil, clinical.ErrConflict
+	}
+	return created, err
+}
 func (r *Repository) GetEncounter(c context.Context, id string) (*clinical.Encounter, error) {
 	return scanEncounter(r.exec(c).QueryRow(c, "SELECT "+encounterCols+" FROM clinical_encounters WHERE id=$1", id))
 }
@@ -140,11 +158,11 @@ func (r *Repository) CompleteEncounter(c context.Context, id, actor string, targ
 	return r.GetEncounter(c, id)
 }
 
-const observationCols = "id,patient_id,visit_id,encounter_id,code,value_numeric,value_text,unit,observed_at,recorded_by,created_at"
+const observationCols = "id,patient_id,visit_id,encounter_id,code,value_numeric,value_text,unit,observed_at,recorded_by,created_at,source_form_id,source_form_field_key"
 
 func scanObservation(row pgx.Row) (clinical.Observation, error) {
 	var x clinical.Observation
-	e := row.Scan(&x.ID, &x.PatientID, &x.VisitID, &x.EncounterID, &x.Code, &x.ValueNumeric, &x.ValueText, &x.Unit, &x.ObservedAt, &x.RecordedBy, &x.CreatedAt)
+	e := row.Scan(&x.ID, &x.PatientID, &x.VisitID, &x.EncounterID, &x.Code, &x.ValueNumeric, &x.ValueText, &x.Unit, &x.ObservedAt, &x.RecordedBy, &x.CreatedAt, &x.SourceFormID, &x.SourceFormFieldKey)
 	return x, e
 }
 func (r *Repository) CreateObservations(c context.Context, in []clinical.Observation) ([]clinical.Observation, error) {

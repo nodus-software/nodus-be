@@ -3,6 +3,19 @@ package clinical
 import "context"
 
 type Repository interface {
+	ListTemplates(context.Context, string, string) ([]ClinicalTemplate, error)
+	GetTemplate(context.Context, string) (*ClinicalTemplate, error)
+	CreateTemplate(context.Context, ClinicalTemplate, ClinicalTemplateVersion) (*ClinicalTemplate, error)
+	CreateTemplateDraft(context.Context, string, string, string) (*ClinicalTemplate, error)
+	UpdateTemplateDraft(context.Context, string, string, UpdateTemplateDraftRequest) (*ClinicalTemplate, error)
+	PublishTemplate(context.Context, string, string) (*ClinicalTemplate, error)
+	SetDefaultTemplate(context.Context, string) (*ClinicalTemplate, error)
+	ArchiveTemplate(context.Context, string) (*ClinicalTemplate, error)
+	CreateEncounterForm(context.Context, string, string, string) (*EncounterForm, error)
+	GetEncounterForm(context.Context, string) (*EncounterForm, error)
+	ListEncounterForms(context.Context, string) ([]EncounterForm, error)
+	SaveEncounterForm(context.Context, string, string, SaveEncounterFormRequest) (*EncounterForm, error)
+	SubmitEncounterForm(context.Context, EncounterForm, string, []Observation) (*EncounterForm, error)
 	ListCatalogueServices(context.Context, CatalogueFilters) ([]CatalogueService, int, error)
 	CreateCatalogueService(context.Context, CatalogueService) (*CatalogueService, error)
 	UpdateCatalogueService(context.Context, string, CatalogueService) (*CatalogueService, error)
@@ -51,6 +64,7 @@ type Repository interface {
 	FindActiveOutpatientVisit(context.Context, string) (*Visit, error)
 	ListVisits(context.Context, string, string) ([]Visit, error)
 	CreateEncounter(context.Context, Encounter) (*Encounter, error)
+	CreateEncounterWithForm(context.Context, Encounter, string, string) (*Encounter, error)
 	GetEncounter(context.Context, string) (*Encounter, error)
 	ListEncounters(context.Context, string) ([]Encounter, error)
 	CompleteEncounter(context.Context, string, string, *string) (*Encounter, error)
