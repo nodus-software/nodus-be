@@ -20,7 +20,20 @@ type outpatientRepo struct {
 	encounters          []Encounter
 	diagnoses           []Diagnosis
 	observations        []Observation
+	allergen            *Allergen
+	allergy             *Allergy
 	completeVisitCalled bool
+}
+
+func (r *outpatientRepo) GetActiveAllergen(context.Context, string) (*Allergen, error) {
+	if r.allergen == nil {
+		return nil, ErrInvalidInput
+	}
+	return r.allergen, nil
+}
+func (r *outpatientRepo) CreateAllergy(_ context.Context, x Allergy) (*Allergy, error) {
+	r.allergy = &x
+	return &x, nil
 }
 
 func (r *outpatientRepo) FindActiveOutpatientVisit(context.Context, string) (*Visit, error) {
@@ -75,6 +88,26 @@ func TestOutpatientOverrideRequiresReason(t *testing.T) {
 	_, err := s.OutpatientCheckIn(context.Background(), "actor", OutpatientCheckInRequest{PatientID: "patient", Override: true})
 	if !errors.Is(err, ErrReasonRequired) {
 		t.Fatalf("expected reason required, got %v", err)
+	}
+}
+
+func TestCreateAllergyUsesConfiguredSnapshot(t *testing.T) {
+	r := &outpatientRepo{allergen: &Allergen{ID: "allergen-1", Code: "penicillins", Name: "Penicillins", Category: "medication", Active: true}}
+	s := NewService(r, noopAudit{})
+	x, e := s.CreateAllergy(context.Background(), "actor", "patient", CreateAllergyRequest{AllergenID: "allergen-1"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if x.Allergen != "Penicillins" || x.AllergenID == nil || x.IsCustom {
+		t.Fatalf("unexpected allergy: %#v", x)
+	}
+}
+func TestCreateAllergyRequiresCatalogueOrOtherButNotBoth(t *testing.T) {
+	s := NewService(&outpatientRepo{}, noopAudit{})
+	for _, q := range []CreateAllergyRequest{{}, {AllergenID: "one", OtherAllergen: "custom"}} {
+		if _, e := s.CreateAllergy(context.Background(), "actor", "patient", q); !errors.Is(e, ErrInvalidInput) {
+			t.Fatalf("expected invalid input for %#v, got %v", q, e)
+		}
 	}
 }
 func TestOutpatientOverrideCreatesVisit(t *testing.T) {

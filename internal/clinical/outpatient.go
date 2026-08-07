@@ -152,7 +152,7 @@ func (s *Service) CreateNote(c context.Context, actor, visitID string, q CreateN
 	return s.repo.CreateNote(c, ClinicalNote{ID: id, PatientID: v.PatientID, VisitID: v.ID, EncounterID: q.EncounterID, NoteType: strings.TrimSpace(q.NoteType), Body: strings.TrimSpace(q.Body), AuthoredBy: actor})
 }
 func (s *Service) CreateDiagnosis(c context.Context, actor, visitID string, q CreateDiagnosisRequest) (*Diagnosis, error) {
-	if strings.TrimSpace(q.Code) == "" || !map[string]bool{"provisional": true, "final": true, "secondary": true}[q.Kind] {
+	if (strings.TrimSpace(q.Code) == "" && strings.TrimSpace(q.ConceptID) == "") || !map[string]bool{"provisional": true, "final": true, "secondary": true}[q.Kind] {
 		return nil, ErrInvalidInput
 	}
 	v, err := s.repo.GetVisit(c, visitID)
@@ -175,10 +175,19 @@ func (s *Service) CreateDiagnosis(c context.Context, actor, visitID string, q Cr
 	if err != nil {
 		return nil, err
 	}
-	return s.repo.CreateDiagnosis(c, Diagnosis{ID: id, PatientID: v.PatientID, VisitID: v.ID, EncounterID: q.EncounterID, Code: strings.TrimSpace(q.Code), Kind: q.Kind, Note: q.Note, RecordedBy: actor})
+	concept, err := s.repo.ResolveICD11Concept(c, strings.TrimSpace(q.ConceptID), strings.TrimSpace(q.Code))
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.CreateDiagnosis(c, Diagnosis{ID: id, PatientID: v.PatientID, VisitID: v.ID, EncounterID: q.EncounterID, ConceptID: concept.ID, Code: concept.Code, Display: concept.Display, Kind: q.Kind, Note: q.Note, RecordedBy: actor})
 }
 func (s *Service) CreateAllergy(c context.Context, actor, patientID string, q CreateAllergyRequest) (*Allergy, error) {
-	if patientID == "" || strings.TrimSpace(q.Allergen) == "" {
+	legacy := strings.TrimSpace(q.Allergen)
+	other := strings.TrimSpace(q.OtherAllergen)
+	if legacy != "" && other == "" {
+		other = legacy
+	}
+	if patientID == "" || (strings.TrimSpace(q.AllergenID) == "") == (other == "") {
 		return nil, ErrInvalidInput
 	}
 	if q.Severity != nil && !map[string]bool{"mild": true, "moderate": true, "severe": true}[*q.Severity] {
@@ -188,7 +197,23 @@ func (s *Service) CreateAllergy(c context.Context, actor, patientID string, q Cr
 	if err != nil {
 		return nil, err
 	}
-	return s.repo.CreateAllergy(c, Allergy{ID: id, PatientID: patientID, Allergen: strings.TrimSpace(q.Allergen), Reaction: q.Reaction, Severity: q.Severity, Status: "active", RecordedBy: actor})
+	x := Allergy{ID: id, PatientID: patientID, Allergen: other, Reaction: q.Reaction, Severity: q.Severity, Status: "active", RecordedBy: actor, IsCustom: true}
+	if q.AllergenID != "" {
+		a, e := s.repo.GetActiveAllergen(c, q.AllergenID)
+		if e != nil {
+			return nil, e
+		}
+		x.AllergenID = &a.ID
+		x.Allergen = a.Name
+		x.AllergenCode = &a.Code
+		x.Category = &a.Category
+		x.IsCustom = false
+	}
+	created, e := s.repo.CreateAllergy(c, x)
+	if e == nil && s.audit != nil {
+		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_allergy_recorded", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"patient_id": patientID, "allergen_id": x.AllergenID, "custom": x.IsCustom}})
+	}
+	return created, e
 }
 func (s *Service) CompleteVisit(c context.Context, actor, id string) (*Visit, error) {
 	v, err := s.repo.GetVisit(c, id)

@@ -17,7 +17,10 @@ type Service struct {
 
 func NewService(r Repository, a AuditRecorder) *Service { return &Service{repo: r, audit: a} }
 
-var resourceKinds = map[string]bool{"departments": true, "service-points": true, "wards": true, "rooms": true, "beds": true, "queues": true}
+// Facility structure and workflow resources, plus the prescribing vocabularies
+// under Reference data. The last three carry no parent and nothing hangs off
+// them — they are code lists the medication catalogue picks from.
+var resourceKinds = map[string]bool{"departments": true, "service-points": true, "wards": true, "rooms": true, "beds": true, "queues": true, DosageFormKind: true, RouteKind: true, UnitOfMeasureKind: true, PrescriptionFrequencyKind: true, SpecimenTypeKind: true}
 
 func (s *Service) ListResources(c context.Context, k string) ([]Resource, error) {
 	if !resourceKinds[k] {
@@ -38,7 +41,13 @@ func (s *Service) CreateResource(c context.Context, actor, k string, q CreateRes
 	if e != nil {
 		return nil, e
 	}
-	r := Resource{ID: id, Code: strings.TrimSpace(q.Code), Name: strings.TrimSpace(q.Name), Active: true, DepartmentID: q.DepartmentID, WardID: q.WardID, RoomID: q.RoomID, ServicePointID: q.ServicePointID, Kind: q.Kind}
+	code := strings.TrimSpace(q.Code)
+	if k == PrescriptionFrequencyKind {
+		code = strings.ToUpper(code)
+	} else if isVocabularyKind(k) {
+		code = strings.ToLower(code)
+	}
+	r := Resource{ID: id, Code: code, Name: strings.TrimSpace(q.Name), Active: true, DepartmentID: q.DepartmentID, WardID: q.WardID, RoomID: q.RoomID, ServicePointID: q.ServicePointID, Kind: q.Kind}
 	x, e := s.repo.CreateResource(c, k, r)
 	if e == nil {
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_configuration_created", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"kind": k}})
@@ -54,6 +63,11 @@ func (s *Service) UpdateResource(c context.Context, actor, k, id string, q Updat
 		v := strings.TrimSpace(*q.Code)
 		if v == "" {
 			return nil, ErrInvalidInput
+		}
+		if k == PrescriptionFrequencyKind {
+			v = strings.ToUpper(v)
+		} else if isVocabularyKind(k) {
+			v = strings.ToLower(v)
 		}
 		q.Code = &v
 	}
@@ -76,6 +90,10 @@ func (s *Service) UpdateResource(c context.Context, actor, k, id string, q Updat
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_configuration_updated", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"kind": k}})
 	}
 	return x, err
+}
+
+func isVocabularyKind(k string) bool {
+	return k == DosageFormKind || k == RouteKind || k == UnitOfMeasureKind || k == PrescriptionFrequencyKind || k == SpecimenTypeKind
 }
 
 func (s *Service) DeactivationImpact(c context.Context, k, id string) (*DeactivationImpact, error) {

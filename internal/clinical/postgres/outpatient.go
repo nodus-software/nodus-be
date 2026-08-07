@@ -194,7 +194,7 @@ func (r *Repository) ListNotes(c context.Context, visit string) ([]clinical.Clin
 	return out, rows.Err()
 }
 func (r *Repository) CreateDiagnosis(c context.Context, x clinical.Diagnosis) (*clinical.Diagnosis, error) {
-	e := r.exec(c).QueryRow(c, "INSERT INTO clinical_diagnoses(id,patient_id,visit_id,encounter_id,concept_id,kind,note,recorded_by) SELECT $1,$2,$3,$4,c.id,$6,$7,$8 FROM terminology_concepts c JOIN terminology_releases r ON r.id=c.release_id WHERE r.system='ICD-10' AND r.active AND c.active AND c.code=$5 RETURNING concept_id,recorded_at", x.ID, x.PatientID, x.VisitID, x.EncounterID, x.Code, x.Kind, x.Note, x.RecordedBy).Scan(&x.ConceptID, &x.RecordedAt)
+	e := r.exec(c).QueryRow(c, "INSERT INTO clinical_diagnoses(id,patient_id,visit_id,encounter_id,concept_id,kind,note,recorded_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING concept_id,recorded_at", x.ID, x.PatientID, x.VisitID, x.EncounterID, x.ConceptID, x.Kind, x.Note, x.RecordedBy).Scan(&x.ConceptID, &x.RecordedAt)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil, clinical.ErrInvalidInput
 	}
@@ -220,11 +220,11 @@ func (r *Repository) ListDiagnoses(c context.Context, visit string) ([]clinical.
 	return out, rows.Err()
 }
 func (r *Repository) CreateAllergy(c context.Context, x clinical.Allergy) (*clinical.Allergy, error) {
-	e := r.exec(c).QueryRow(c, "INSERT INTO clinical_allergies(id,patient_id,allergen,reaction,severity,status,recorded_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING recorded_at", x.ID, x.PatientID, x.Allergen, x.Reaction, x.Severity, x.Status, x.RecordedBy).Scan(&x.RecordedAt)
-	return &x, e
+	e := r.exec(c).QueryRow(c, "INSERT INTO clinical_allergies(id,patient_id,allergen,allergen_id,reaction,severity,status,recorded_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING recorded_at", x.ID, x.PatientID, x.Allergen, x.AllergenID, x.Reaction, x.Severity, x.Status, x.RecordedBy).Scan(&x.RecordedAt)
+	return &x, normalizeResourceError(e)
 }
 func (r *Repository) ListAllergies(c context.Context, patient string) ([]clinical.Allergy, error) {
-	rows, e := r.exec(c).Query(c, "SELECT id,patient_id,allergen,reaction,severity,status,recorded_by,recorded_at FROM clinical_allergies WHERE patient_id=$1 ORDER BY recorded_at DESC", patient)
+	rows, e := r.exec(c).Query(c, "SELECT a.id,a.patient_id,a.allergen,a.reaction,a.severity,a.status,a.recorded_by,a.recorded_at,a.allergen_id,c.code,c.category,(a.allergen_id IS NULL) FROM clinical_allergies a LEFT JOIN allergen_catalogue c ON c.id=a.allergen_id WHERE a.patient_id=$1 ORDER BY a.recorded_at DESC", patient)
 	if e != nil {
 		return nil, e
 	}
@@ -232,7 +232,7 @@ func (r *Repository) ListAllergies(c context.Context, patient string) ([]clinica
 	out := []clinical.Allergy{}
 	for rows.Next() {
 		var x clinical.Allergy
-		if e = rows.Scan(&x.ID, &x.PatientID, &x.Allergen, &x.Reaction, &x.Severity, &x.Status, &x.RecordedBy, &x.RecordedAt); e != nil {
+		if e = rows.Scan(&x.ID, &x.PatientID, &x.Allergen, &x.Reaction, &x.Severity, &x.Status, &x.RecordedBy, &x.RecordedAt, &x.AllergenID, &x.AllergenCode, &x.Category, &x.IsCustom); e != nil {
 			return nil, e
 		}
 		out = append(out, x)

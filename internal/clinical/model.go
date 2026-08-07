@@ -63,9 +63,13 @@ type RoutingRule struct {
 	Active        bool    `json:"active"`
 }
 type Concept struct {
+	ID      string `json:"id"`
 	Code    string `json:"code"`
 	Display string `json:"display"`
 	Version string `json:"version"`
+	URI     string `json:"uri,omitempty"`
+	Chapter string `json:"chapter,omitempty"`
+	Enabled bool   `json:"enabled"`
 }
 type CreateResourceRequest struct {
 	Code           string  `json:"code"`
@@ -199,14 +203,18 @@ type Diagnosis struct {
 	RecordedAt  time.Time `json:"recorded_at"`
 }
 type Allergy struct {
-	ID         string    `json:"id"`
-	PatientID  string    `json:"patient_id"`
-	Allergen   string    `json:"allergen"`
-	Status     string    `json:"status"`
-	RecordedBy string    `json:"recorded_by"`
-	Reaction   *string   `json:"reaction,omitempty"`
-	Severity   *string   `json:"severity,omitempty"`
-	RecordedAt time.Time `json:"recorded_at"`
+	ID           string    `json:"id"`
+	PatientID    string    `json:"patient_id"`
+	Allergen     string    `json:"allergen"`
+	Status       string    `json:"status"`
+	RecordedBy   string    `json:"recorded_by"`
+	Reaction     *string   `json:"reaction,omitempty"`
+	Severity     *string   `json:"severity,omitempty"`
+	RecordedAt   time.Time `json:"recorded_at"`
+	AllergenID   *string   `json:"allergen_id,omitempty"`
+	AllergenCode *string   `json:"allergen_code,omitempty"`
+	Category     *string   `json:"category,omitempty"`
+	IsCustom     bool      `json:"is_custom"`
 }
 type VisitSummary struct {
 	Visit        Visit          `json:"visit"`
@@ -237,13 +245,16 @@ type CreateNoteRequest struct {
 type CreateDiagnosisRequest struct {
 	EncounterID *string `json:"encounter_id,omitempty"`
 	Code        string  `json:"code"`
+	ConceptID   string  `json:"concept_id,omitempty"`
 	Kind        string  `json:"kind"`
 	Note        *string `json:"note,omitempty"`
 }
 type CreateAllergyRequest struct {
-	Allergen string  `json:"allergen"`
-	Reaction *string `json:"reaction,omitempty"`
-	Severity *string `json:"severity,omitempty"`
+	Allergen      string  `json:"allergen,omitempty"`
+	AllergenID    string  `json:"allergen_id,omitempty"`
+	OtherAllergen string  `json:"other_allergen,omitempty"`
+	Reaction      *string `json:"reaction,omitempty"`
+	Severity      *string `json:"severity,omitempty"`
 }
 type CompleteEncounterRequest struct {
 	ConsultationQueueID *string `json:"consultation_queue_id,omitempty"`

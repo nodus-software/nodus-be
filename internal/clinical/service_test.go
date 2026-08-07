@@ -62,6 +62,32 @@ func TestCreateBedPassesRoomToRepository(t *testing.T) {
 	}
 }
 
+func TestPrescribingVocabulariesAreResourceKinds(t *testing.T) {
+	for _, kind := range []string{DosageFormKind, RouteKind, UnitOfMeasureKind, PrescriptionFrequencyKind, SpecimenTypeKind} {
+		r := &resourceRepo{}
+		s := NewService(r, noopAudit{})
+		if _, err := s.CreateResource(context.Background(), "actor", kind, CreateResourceRequest{Code: "tablet", Name: "Tablet"}); err != nil {
+			t.Fatalf("create %s: %v", kind, err)
+		}
+		// Vocabularies are flat lists, so nothing parent-shaped should be set.
+		if r.created == nil || r.created.DepartmentID != nil || r.created.WardID != nil {
+			t.Fatalf("expected a parentless %s entry, got %#v", kind, r.created)
+		}
+	}
+}
+
+func TestVocabularyCodesAreCanonicalLowercase(t *testing.T) {
+	r := &resourceRepo{}
+	s := NewService(r, noopAudit{})
+	_, err := s.CreateResource(context.Background(), "actor", PrescriptionFrequencyKind, CreateResourceRequest{Code: " BID ", Name: " Twice daily "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.created.Code != "BID" || r.created.Name != "Twice daily" {
+		t.Fatalf("unexpected normalized resource: %#v", r.created)
+	}
+}
+
 func TestDeactivateRequiresReason(t *testing.T) {
 	r := &resourceRepo{}
 	s := NewService(r, noopAudit{})

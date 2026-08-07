@@ -25,3 +25,27 @@ func RequirePermission(code string) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// RequireAnyPermission allows routes shared by operational clinical readers and
+// catalogue administrators without forcing either role to receive the other's writes.
+func RequireAnyPermission(codes ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ac, ok := AuthFromContext(r.Context())
+			allowed := ok && slices.Contains(ac.Permissions, "*")
+			if ok && !allowed {
+				for _, code := range codes {
+					if slices.Contains(ac.Permissions, code) {
+						allowed = true
+						break
+					}
+				}
+			}
+			if !allowed {
+				response.Forbidden(w, "you do not have permission to perform this action")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

@@ -74,6 +74,7 @@ func (h *Handler) CreateResource(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, e)
 		return
 	}
+	h.log.Info("clinical configuration created", "kind", chi.URLParam(r, "kind"), "resource_id", x.ID, "actor_id", a)
 	response.Created(w, x)
 }
 
@@ -92,6 +93,7 @@ func (h *Handler) UpdateResource(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	h.log.Info("clinical configuration updated", "kind", chi.URLParam(r, "kind"), "resource_id", x.ID, "actor_id", a)
 	response.OK(w, x)
 }
 
@@ -119,6 +121,7 @@ func (h *Handler) DeactivateResource(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	h.log.Info("clinical configuration deactivated", "kind", chi.URLParam(r, "kind"), "resource_id", chi.URLParam(r, "resourceId"), "affected_count", len(x.Affected), "actor_id", a)
 	response.OK(w, x)
 }
 
@@ -133,6 +136,7 @@ func (h *Handler) ReactivateResource(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	h.log.Info("clinical configuration reactivated", "kind", chi.URLParam(r, "kind"), "resource_id", x.ID, "actor_id", a)
 	response.OK(w, x)
 }
 func (h *Handler) CreateVisit(w http.ResponseWriter, r *http.Request) {

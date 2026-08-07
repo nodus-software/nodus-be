@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"nodus-health/internal/auth"
+	"nodus-health/internal/clinical"
 	"nodus-health/internal/email"
 	"nodus-health/internal/middleware"
 	"nodus-health/internal/tenant"
@@ -135,6 +136,12 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 		activationID, tenantID, userID, security.HashToken(rawToken), now.Add(24*time.Hour)); err != nil {
 		return nil, err
 	}
+	if err = seedPrescribingReferenceData(ctx, tx); err != nil {
+		return nil, err
+	}
+	if err = seedAllergens(ctx, tx); err != nil {
+		return nil, err
+	}
 	auditID, _ := utility.GenerateUUID()
 	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,tenant_id,user_id,action,result) VALUES($1,$2,NULL,'organization_registered','success')`, auditID, tenantID); err != nil {
 		return nil, err
@@ -162,6 +169,48 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 		s.log.Error("failed to send organization activation", "error", err.Error())
 	}
 	return &org, nil
+}
+
+// The medication form picks dosage form, route and unit of measure from lists a
+// facility configures, so a tenant with empty lists cannot record a medication
+// properly. New tenants start with the same defaults migration 000016 gave
+// existing ones; tenant_id comes from the stamp_tenant_id trigger, which reads
+// the app.tenant_id set earlier in this transaction.
+func seedPrescribingReferenceData(ctx context.Context, tx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}) error {
+	for _, list := range []struct {
+		table   string
+		entries []clinical.VocabularyEntry
+	}{
+		{"medication_dosage_forms", clinical.DefaultDosageForms},
+		{"administration_routes", clinical.DefaultRoutes},
+		{"units_of_measure", clinical.DefaultUnitsOfMeasure},
+		{"prescription_frequencies", clinical.DefaultPrescriptionFrequencies},
+		{"specimen_types", clinical.DefaultSpecimenTypes},
+	} {
+		codes := make([]string, len(list.entries))
+		names := make([]string, len(list.entries))
+		for i, entry := range list.entries {
+			codes[i], names[i] = entry.Code, entry.Name
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO `+list.table+`(id,code,name)
+			SELECT gen_random_uuid(),v.code,v.name FROM unnest($1::text[],$2::text[]) AS v(code,name)`, codes, names); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedAllergens(ctx context.Context, tx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}) error {
+	for _, x := range clinical.DefaultAllergens {
+		if _, err := tx.Exec(ctx, `INSERT INTO allergen_catalogue(id,code,name,category,aliases) VALUES(gen_random_uuid(),$1,$2,$3,$4)`, x.Code, x.Name, x.Category, x.Aliases); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) Current(ctx context.Context) (*Organization, error) {

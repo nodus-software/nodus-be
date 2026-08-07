@@ -38,6 +38,16 @@ func resourceSpec(k string) (table, selectCols string, err error) {
 		return "beds", "id,code,name,active,NULL::uuid,ward_id,room_id,NULL::uuid,NULL::text,status,created_at", nil
 	case "queues":
 		return "queues", "id,code,name,active,NULL::uuid,NULL::uuid,NULL::uuid,service_point_id,NULL::text,NULL::text,created_at", nil
+	case "dosage-forms":
+		return "medication_dosage_forms", "id,code,name,active,NULL::uuid,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,created_at", nil
+	case "routes":
+		return "administration_routes", "id,code,name,active,NULL::uuid,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,created_at", nil
+	case "units-of-measure":
+		return "units_of_measure", "id,code,name,active,NULL::uuid,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,created_at", nil
+	case "prescription-frequencies":
+		return "prescription_frequencies", "id,code,name,active,NULL::uuid,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,created_at", nil
+	case "specimen-types":
+		return "specimen_types", "id,code,name,active,NULL::uuid,NULL::uuid,NULL::uuid,NULL::uuid,NULL::text,NULL::text,created_at", nil
 	default:
 		return "", "", clinical.ErrInvalidInput
 	}
@@ -68,7 +78,7 @@ func (r *Repository) ListResources(c context.Context, k string) ([]clinical.Reso
 	return out, rows.Err()
 }
 func (r *Repository) CreateResource(c context.Context, k string, x clinical.Resource) (*clinical.Resource, error) {
-	_, cols, e := resourceSpec(k)
+	table, cols, e := resourceSpec(k)
 	if e != nil {
 		return nil, e
 	}
@@ -114,6 +124,10 @@ func (r *Repository) CreateResource(c context.Context, k string, x clinical.Reso
 		}
 		q = "INSERT INTO queues(id,code,name,service_point_id) VALUES($1,$2,$3,$4) RETURNING " + cols
 		args = []any{x.ID, x.Code, x.Name, *x.ServicePointID}
+	case "dosage-forms", "routes", "units-of-measure", "prescription-frequencies", "specimen-types":
+		// Prescribing vocabularies are flat code/name lists — no parent to resolve.
+		q = "INSERT INTO " + table + "(id,code,name) VALUES($1,$2,$3) RETURNING " + cols
+		args = []any{x.ID, x.Code, x.Name}
 	default:
 		return nil, clinical.ErrInvalidInput
 	}

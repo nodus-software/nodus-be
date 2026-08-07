@@ -100,6 +100,21 @@ override it when needed:
 MIGRATION_DB_URL='postgres://user:password@host:5432/database?sslmode=require' make migrate-up
 ```
 
+### Why the API connects as a different role
+
+Tenant scoping is enforced by PostgreSQL row-level security: the clinical
+queries carry no tenant predicate of their own and rely entirely on each table's
+`tenant_isolation` policy, keyed off the `app.tenant_id` that
+`middleware.TenantTransaction` sets per request.
+
+PostgreSQL skips those policies for superusers and for roles holding
+`BYPASSRLS`. Connecting the API as the schema owner therefore returns *every*
+tenant's rows with no error and no warning. `make setup` creates `nodus_app`
+(see `deploy/app_role.sql`) with neither privilege, and `DB_URL` points at it;
+only `MIGRATION_DB_URL` uses the owner. Re-run `make db-role` if the role is
+ever dropped — it is idempotent, and later migrations are covered by
+`ALTER DEFAULT PRIVILEGES`.
+
 The defaults are for local development only. Production must provide strong
 values for secrets, enable secure refresh cookies, and use TLS-enabled database
 connections. See [docs/deployment.md](docs/deployment.md) for production setup.
@@ -126,14 +141,16 @@ Run `make` or `make help` to see the complete target list.
 
 | Command | Description |
 | --- | --- |
-| `make setup` | Download dependencies, start PostgreSQL, and migrate it |
+| `make setup` | Download dependencies, start PostgreSQL, create the runtime role, and migrate it |
 | `make dev` | Run the API with Air live reload |
 | `make run` | Run the API directly |
 | `make db-up` | Start PostgreSQL and wait for its health check |
+| `make db-role` | Create/refresh the least-privileged runtime role |
 | `make db-status` | Show Compose service status |
 | `make db-logs` | Follow PostgreSQL logs |
 | `make db-down` | Stop services while preserving database data |
 | `make migrate-up` | Apply all pending embedded migrations |
+| `make import-icd11 FILE=/path/file.xlsx [COMMIT=1]` | Validate or atomically import a WHO ICD-11 MMS workbook |
 | `make generate` | Regenerate sqlc code after SQL changes |
 | `make test` | Run the test suite |
 | `make test-race` | Run tests with the Go race detector |

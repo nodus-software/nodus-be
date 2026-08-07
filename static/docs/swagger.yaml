@@ -1363,7 +1363,7 @@ paths:
       - name: kind
         in: path
         required: true
-        schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues] }
+        schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues, dosage-forms, routes, units-of-measure, prescription-frequencies, specimen-types] }
     get:
       tags: [Configuration]
       security: [{ bearerAuth: [] }]
@@ -1374,13 +1374,62 @@ paths:
       tags: [Configuration]
       security: [{ bearerAuth: [] }]
       summary: Create a configured clinical resource
-      description: Rooms require `ward_id` and their codes are unique within that ward. Beds require `room_id`, their `ward_id` is derived from the room, and their codes are unique within that room.
+      description: Rooms require `ward_id` and their codes are unique within that ward. Beds require `room_id`, their `ward_id` is derived from the room, and their codes are unique within that room. Flat reference lists (dosage forms, routes, units, prescription frequencies and specimen types) are tenant-owned; their codes and names are case-insensitively unique within a tenant.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateResource' } } } }
       responses:
         '201': { description: Created resource, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceResponse' } } } }
+  /clinical/config/diagnoses:
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Search the active ICD-11 MMS release with tenant availability
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: chapter, in: query, schema: { type: string } }
+        - { name: availability, in: query, schema: { type: string, enum: [all, enabled, disabled] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses: { '200': { description: Paginated ICD-11 concepts } }
+  /clinical/config/diagnoses/{conceptId}:
+    patch:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Enable or disable an ICD-11 concept for the current tenant
+      parameters: [{ name: conceptId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [enabled], properties: { enabled: { type: boolean } } } } } }
+      responses: { '200': { description: Updated tenant availability } }
+  /clinical/config/allergens:
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: List the tenant allergen catalogue
+      responses: { '200': { description: Allergen list } }
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Add an allergen to the tenant catalogue
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AllergenInput' } } } }
+      responses: { '201': { description: Created allergen } }
+  /clinical/config/allergens/{allergenId}:
+    patch:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Update an allergen without changing historical patient records
+      parameters: [{ name: allergenId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AllergenInput' } } } }
+      responses: { '200': { description: Updated allergen } }
+  /clinical/config/allergens/{allergenId}/{action}:
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Deactivate or reactivate an allergen
+      parameters:
+        - { name: allergenId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [deactivate, reactivate] } }
+      responses: { '200': { description: Updated allergen } }
   /clinical/config/{kind}/{resourceId}:
     parameters:
-      - { name: kind, in: path, required: true, schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues] } }
+      - { name: kind, in: path, required: true, schema: { type: string, enum: [departments, service-points, wards, rooms, beds, queues, dosage-forms, routes, units-of-measure, prescription-frequencies, specimen-types] } }
       - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
     patch:
       tags: [Configuration]
@@ -1504,7 +1553,7 @@ paths:
     post:
       tags: [Clinical]
       security: [{ bearerAuth: [] }]
-      summary: Add an ICD-10 diagnosis to an active visit
+      summary: Add an enabled ICD-11 diagnosis to an active visit
       parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateDiagnosis' } } } }
       responses: { '201': { description: Created diagnosis }, '422': { $ref: '#/components/responses/ValidationError' } }
@@ -1588,6 +1637,145 @@ paths:
       summary: Search the active ICD-10 release
       parameters: [{ name: q, in: query, required: true, schema: { type: string, minLength: 2 } }]
       responses: { '200': { description: Matching concepts } }
+  /clinical/terminology/icd11:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Search tenant-enabled concepts in the active ICD-11 MMS release
+      parameters: [{ name: q, in: query, required: true, schema: { type: string, minLength: 2 } }]
+      responses: { '200': { description: Matching standalone ICD-11 concepts with WHO URIs } }
+
+  /clinical/config/services:
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: List the facility service catalogue
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [all, active, inactive] } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: department_id, in: query, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses: { "200": { description: Paginated facility services } }
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Create a facility service
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ServiceCatalogueInput" } } } }
+      responses: { "201": { description: Created service }, "409": { $ref: "#/components/responses/Conflict" }, "422": { $ref: "#/components/responses/ValidationError" } }
+  /clinical/config/services/{itemId}:
+    patch:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Update a facility service
+      parameters: [{ name: itemId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ServiceCatalogueInput" } } } }
+      responses: { "200": { description: Updated service }, "404": { $ref: "#/components/responses/NotFound" } }
+  /clinical/config/services/{itemId}/{action}:
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Deactivate or reactivate a facility service
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [deactivate, reactivate] } }
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/CatalogueLifecycleRequest" } } } }
+      responses: { "200": { description: Updated service } }
+  /clinical/config/medications:
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: List the facility medication catalogue
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [all, active, inactive] } }
+        - { name: prescription, in: query, schema: { type: string, enum: [all, required, otc] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses: { "200": { description: Paginated medication definitions } }
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Create a facility medication definition
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MedicationCatalogueInput" } } } }
+      responses: { "201": { description: Created medication definition }, "409": { $ref: "#/components/responses/Conflict" } }
+  /clinical/config/medications/{itemId}:
+    patch:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Update a facility medication definition
+      parameters: [{ name: itemId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MedicationCatalogueInput" } } } }
+      responses: { "200": { description: Updated medication definition }, "404": { $ref: "#/components/responses/NotFound" } }
+  /clinical/config/medications/{itemId}/{action}:
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Deactivate or reactivate a medication definition
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [deactivate, reactivate] } }
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/CatalogueLifecycleRequest" } } } }
+      responses: { "200": { description: Updated medication definition } }
+  /clinical/config/reference/{catalogue}:
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Search the active approved reference library
+      parameters:
+        - { name: catalogue, in: path, required: true, schema: { type: string, enum: [services, medications] } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses: { "200": { description: Paginated reference items } }
+  /clinical/config/services/adopt:
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Atomically adopt reference services into the facility catalogue
+      requestBody: { required: true, content: { application/json: { schema: { type: array, maxItems: 500, items: { $ref: "#/components/schemas/ServiceAdoption" } } } } }
+      responses: { "201": { description: Adopted services }, "409": { $ref: "#/components/responses/Conflict" } }
+  /clinical/config/medications/adopt:
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Atomically adopt reference medications into the facility catalogue
+      requestBody: { required: true, content: { application/json: { schema: { type: array, maxItems: 500, items: { $ref: "#/components/schemas/MedicationAdoption" } } } } }
+      responses: { "201": { description: Adopted medications }, "409": { $ref: "#/components/responses/Conflict" } }
+  /clinical/config/{catalogue}/imports/template:
+    get:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Download the catalogue CSV template
+      parameters: [{ name: catalogue, in: path, required: true, schema: { type: string, enum: [services, medications] } }]
+      responses: { "200": { description: CSV template, content: { text/csv: { schema: { type: string, format: binary } } } } }
+  /clinical/config/{catalogue}/imports/preview:
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Validate and stage a catalogue CSV import
+      parameters: [{ name: catalogue, in: path, required: true, schema: { type: string, enum: [services, medications] } }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, mode]
+              properties:
+                file: { type: string, format: binary }
+                mode: { type: string, enum: [create_only, upsert], default: create_only }
+      responses: { "200": { description: Import preview, content: { application/json: { schema: { $ref: "#/components/schemas/CatalogueImportPreviewResponse" } } } } }
+  /clinical/config/{catalogue}/imports/{importId}/commit:
+    post:
+      tags: [Configuration]
+      security: [{ bearerAuth: [] }]
+      summary: Atomically commit a valid staged catalogue import
+      parameters:
+        - { name: catalogue, in: path, required: true, schema: { type: string, enum: [services, medications] } }
+        - { name: importId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { "200": { description: Import committed }, "409": { $ref: "#/components/responses/Conflict" } }
 
 components:
   securitySchemes:
@@ -1661,6 +1849,58 @@ components:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   schemas:
+    ServiceCatalogueInput:
+      type: object
+      required: [code, name, category, requires_order, requires_result]
+      properties:
+        reference_item_id: { type: string, format: uuid, nullable: true }
+        code: { type: string, minLength: 1, maxLength: 100 }
+        name: { type: string, minLength: 1 }
+        category: { type: string, enum: [laboratory, imaging, procedure, nursing_service, consultation, therapy, other] }
+        department_id: { type: string, format: uuid, nullable: true }
+        service_point_id: { type: string, format: uuid, nullable: true }
+        price: { type: number, minimum: 0, nullable: true, description: Facility price in the supplied currency's major unit. }
+        currency: { type: string, minLength: 3, maxLength: 3, default: KES }
+        requires_order: { type: boolean }
+        requires_result: { type: boolean }
+        estimated_duration_minutes: { type: integer, minimum: 1, nullable: true }
+    MedicationCatalogueInput:
+      type: object
+      required: [code, generic_name, prescription_required]
+      properties:
+        reference_item_id: { type: string, format: uuid, nullable: true }
+        code: { type: string, minLength: 1, maxLength: 100 }
+        generic_name: { type: string, minLength: 1 }
+        brand_name: { type: string, nullable: true }
+        strength: { type: string, nullable: true }
+        dosage_form: { type: string, nullable: true, description: Code of an active entry in /clinical/config/dosage-forms. Common abbreviations ("Tab") are accepted and stored as the configured code. }
+        route: { type: string, nullable: true, description: Code of an active entry in /clinical/config/routes. }
+        pack_size: { type: string, nullable: true }
+        unit_of_measure: { type: string, nullable: true, description: Code of an active entry in /clinical/config/units-of-measure. }
+        prescription_required: { type: boolean }
+    CatalogueLifecycleRequest:
+      type: object
+      properties: { reason: { type: string, description: Required when deactivating. } }
+    ServiceAdoption:
+      type: object
+      required: [reference_item_id, code, requires_order, requires_result]
+      properties:
+        reference_item_id: { type: string, format: uuid }
+        code: { type: string, minLength: 1 }
+        price: { type: number, minimum: 0, nullable: true }
+        currency: { type: string, default: KES }
+        requires_order: { type: boolean }
+        requires_result: { type: boolean }
+    MedicationAdoption:
+      type: object
+      required: [reference_item_id, code, prescription_required]
+      properties:
+        reference_item_id: { type: string, format: uuid }
+        code: { type: string, minLength: 1 }
+        prescription_required: { type: boolean }
+    CatalogueImportPreviewResponse:
+      allOf: [{ $ref: "#/components/schemas/SuccessResponse" }]
+
     ClinicalResource:
       type: object
       required: [id, code, name, active, created_at]
@@ -1775,12 +2015,20 @@ components:
       properties: { encounter_id: { type: string, format: uuid }, note_type: { type: string }, body: { type: string, minLength: 1 } }
     CreateDiagnosis:
       type: object
-      required: [code, kind]
-      properties: { encounter_id: { type: string, format: uuid }, code: { type: string }, kind: { type: string, enum: [provisional, final, secondary] }, note: { type: string } }
+      required: [kind]
+      description: concept_id is preferred. code is accepted temporarily and resolved against the active ICD-11 release.
+      properties: { encounter_id: { type: string, format: uuid }, concept_id: { type: string, format: uuid }, code: { type: string }, kind: { type: string, enum: [provisional, final, secondary] }, note: { type: string } }
     CreateAllergy:
       type: object
-      required: [allergen]
-      properties: { allergen: { type: string }, reaction: { type: string }, severity: { type: string, enum: [mild, moderate, severe] } }
+      description: Exactly one of allergen_id or other_allergen is required. allergen remains a deprecated alias for other_allergen.
+      properties: { allergen_id: { type: string, format: uuid }, other_allergen: { type: string }, allergen: { type: string, deprecated: true }, reaction: { type: string }, severity: { type: string, enum: [mild, moderate, severe] } }
+    AllergenInput:
+      type: object
+      properties:
+        code: { type: string }
+        name: { type: string }
+        category: { type: string, enum: [medication, food, contrast, contact, insect, environmental, other] }
+        aliases: { type: array, items: { type: string } }
     QueueEntry:
       type: object
       required: [id, queue_id, subject_type, subject_id, patient_id, status, priority, joined_at]
