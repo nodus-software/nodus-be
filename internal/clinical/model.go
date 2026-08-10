@@ -16,15 +16,17 @@ type Resource struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 type Visit struct {
-	ID        string     `json:"id"`
-	PatientID string     `json:"patient_id"`
-	VisitType string     `json:"visit_type"`
-	Status    string     `json:"status"`
-	Reason    *string    `json:"reason,omitempty"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	CreatedBy string     `json:"created_by"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID             string     `json:"id"`
+	PatientID      string     `json:"patient_id"`
+	VisitType      string     `json:"visit_type"`
+	Status         string     `json:"status"`
+	Reason         *string    `json:"reason,omitempty"`
+	ServicePointID *string    `json:"service_point_id,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	EndedAt        *time.Time `json:"ended_at,omitempty"`
+	CreatedBy      string     `json:"created_by"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 type QueueEntry struct {
 	ID               string    `json:"id"`
@@ -54,13 +56,16 @@ type QueueHistory struct {
 	OccurredAt  time.Time `json:"occurred_at"`
 }
 type RoutingRule struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	EventType     string  `json:"event_type"`
-	VisitType     *string `json:"visit_type,omitempty"`
-	TargetQueueID string  `json:"target_queue_id"`
-	Priority      int16   `json:"priority"`
-	Active        bool    `json:"active"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	EventType       string  `json:"event_type"`
+	VisitType       *string `json:"visit_type,omitempty"`
+	EncounterType   *string `json:"encounter_type,omitempty"`
+	OrderKind       *string `json:"order_kind,omitempty"`
+	ServiceCategory *string `json:"service_category,omitempty"`
+	TargetQueueID   string  `json:"target_queue_id"`
+	Priority        int16   `json:"priority"`
+	Active          bool    `json:"active"`
 }
 type Concept struct {
 	ID      string `json:"id"`
@@ -120,9 +125,10 @@ type ResourceLifecycleResult struct {
 	Affected []ResourceReference `json:"affected"`
 }
 type CreateVisitRequest struct {
-	PatientID string  `json:"patient_id"`
-	VisitType string  `json:"visit_type"`
-	Reason    *string `json:"reason,omitempty"`
+	PatientID      string  `json:"patient_id"`
+	VisitType      string  `json:"visit_type"`
+	Reason         *string `json:"reason,omitempty"`
+	ServicePointID *string `json:"service_point_id,omitempty"`
 }
 type EnqueueRequest struct {
 	SubjectType string `json:"subject_type"`
@@ -140,11 +146,14 @@ type TransitionRequest struct {
 	Reason   string  `json:"reason"`
 }
 type CreateRoutingRuleRequest struct {
-	Name          string  `json:"name"`
-	EventType     string  `json:"event_type"`
-	VisitType     *string `json:"visit_type,omitempty"`
-	TargetQueueID string  `json:"target_queue_id"`
-	Priority      int16   `json:"priority"`
+	Name            string  `json:"name"`
+	EventType       string  `json:"event_type"`
+	VisitType       *string `json:"visit_type,omitempty"`
+	EncounterType   *string `json:"encounter_type,omitempty"`
+	OrderKind       *string `json:"order_kind,omitempty"`
+	ServiceCategory *string `json:"service_category,omitempty"`
+	TargetQueueID   string  `json:"target_queue_id"`
+	Priority        int16   `json:"priority"`
 }
 
 type Encounter struct {
@@ -157,6 +166,7 @@ type Encounter struct {
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	EndedAt        *time.Time `json:"ended_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type ObservationInput struct {
@@ -232,10 +242,13 @@ type OutpatientCheckInRequest struct {
 	Reason         *string `json:"reason,omitempty"`
 	Override       bool    `json:"override,omitempty"`
 	OverrideReason *string `json:"override_reason,omitempty"`
+	ServicePointID *string `json:"service_point_id,omitempty"`
 }
 type CreateEncounterRequest struct {
 	EncounterType  string  `json:"encounter_type"`
 	ServicePointID *string `json:"service_point_id,omitempty"`
+	Override       bool    `json:"-"`
+	OverrideReason *string `json:"override_reason,omitempty"`
 }
 type RecordObservationsRequest struct {
 	Observations []ObservationInput `json:"observations"`
@@ -260,5 +273,12 @@ type CreateAllergyRequest struct {
 	Severity      *string `json:"severity,omitempty"`
 }
 type CompleteEncounterRequest struct {
-	ConsultationQueueID *string `json:"consultation_queue_id,omitempty"`
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+	OverrideReason    *string    `json:"override_reason,omitempty"`
+}
+
+type CompleteVisitRequest struct {
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+	OverrideReason    *string    `json:"override_reason,omitempty"`
+	Override          bool       `json:"-"`
 }

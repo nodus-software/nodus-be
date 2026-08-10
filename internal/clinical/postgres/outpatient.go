@@ -3,11 +3,72 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"nodus-health/internal/clinical"
 	"nodus-health/pkg/utility"
 )
+
+func (r *Repository) ListOutpatientVisitItems(c context.Context, f clinical.OutpatientVisitFilters) ([]clinical.OutpatientVisitListItem, int, error) {
+	where, args := []string{"v.visit_type='outpatient'"}, []any{}
+	add := func(format string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(format, len(args)))
+	}
+	if f.Date != "" {
+		add("v.started_at::date=$%d::date", f.Date)
+	} else {
+		where = append(where, "v.started_at>=date_trunc('day',now())")
+	}
+	if f.Status != "" {
+		add("v.status::text=$%d", f.Status)
+	}
+	if f.ServicePointID != "" {
+		add("v.service_point_id=$%d", f.ServicePointID)
+	}
+	if f.ClinicianID != "" {
+		add("EXISTS(SELECT 1 FROM clinical_encounters ce WHERE ce.visit_id=v.id AND ce.clinician_id=$%d)", f.ClinicianID)
+	}
+	if f.Query != "" {
+		args = append(args, f.Query)
+		n := len(args)
+		where = append(where, fmt.Sprintf("(p.full_name ILIKE '%%'||$%d||'%%' OR p.mrn ILIKE '%%'||$%d||'%%')", n, n))
+	}
+	stage := `CASE WHEN v.status='completed' THEN 'completed' WHEN v.status='cancelled' THEN 'cancelled' WHEN EXISTS(SELECT 1 FROM clinical_encounters e WHERE e.visit_id=v.id AND e.encounter_type='consultation') THEN 'consultation' WHEN EXISTS(SELECT 1 FROM clinical_encounters e WHERE e.visit_id=v.id AND e.encounter_type='triage') THEN 'triage' ELSE 'checked_in' END`
+	if f.Stage != "" {
+		add("("+stage+")=$%d", f.Stage)
+	}
+	base := ` FROM clinical_visits v JOIN patients p ON p.id=v.patient_id LEFT JOIN LATERAL (SELECT e.status::text,q.name FROM queue_entries e JOIN queues q ON q.id=e.queue_id WHERE e.subject_type='visit' AND e.subject_id=v.id AND e.status IN ('waiting','called','in_service','paused') ORDER BY e.updated_at DESC LIMIT 1) qe ON true WHERE ` + strings.Join(where, " AND ")
+	var total int
+	if e := r.exec(c).QueryRow(c, "SELECT count(*)"+base, args...).Scan(&total); e != nil {
+		return nil, 0, e
+	}
+	page, per := f.Page, f.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if per < 1 || per > 100 {
+		per = 25
+	}
+	args = append(args, per, (page-1)*per)
+	q := `SELECT v.id,v.patient_id,v.visit_type::text,v.status::text,v.reason,v.service_point_id,v.started_at,v.ended_at,v.created_by,v.created_at,v.updated_at,p.full_name,p.mrn,` + stage + `,qe.status,qe.name,EXISTS(SELECT 1 FROM clinical_encounters te WHERE te.visit_id=v.id AND te.encounter_type='triage' AND te.status='completed'),(SELECT u.full_name FROM clinical_encounters ce JOIN users u ON u.id=ce.clinician_id WHERE ce.visit_id=v.id AND ce.encounter_type='consultation' ORDER BY ce.created_at DESC LIMIT 1),GREATEST(0,EXTRACT(EPOCH FROM(now()-v.started_at))/60)::int` + base + fmt.Sprintf(" ORDER BY v.started_at DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	rows, e := r.exec(c).Query(c, q, args...)
+	if e != nil {
+		return nil, 0, e
+	}
+	defer rows.Close()
+	out := []clinical.OutpatientVisitListItem{}
+	for rows.Next() {
+		var x clinical.OutpatientVisitListItem
+		if e = rows.Scan(&x.Visit.ID, &x.Visit.PatientID, &x.Visit.VisitType, &x.Visit.Status, &x.Visit.Reason, &x.Visit.ServicePointID, &x.Visit.StartedAt, &x.Visit.EndedAt, &x.Visit.CreatedBy, &x.Visit.CreatedAt, &x.Visit.UpdatedAt, &x.PatientName, &x.PatientMRN, &x.WorkflowStage, &x.QueueStatus, &x.QueueName, &x.TriageCompleted, &x.AttendingClinicianName, &x.WaitingMinutes); e != nil {
+			return nil, 0, e
+		}
+		out = append(out, x)
+	}
+	return out, total, rows.Err()
+}
 
 func (r *Repository) FindActiveOutpatientVisit(c context.Context, patient string) (*clinical.Visit, error) {
 	var locked string
@@ -46,11 +107,11 @@ func (r *Repository) ListVisits(c context.Context, kind, status string) ([]clini
 	return out, rows.Err()
 }
 
-const encounterCols = "id,visit_id,encounter_type::text,status::text,service_point_id,clinician_id,started_at,ended_at,created_at"
+const encounterCols = "id,visit_id,encounter_type::text,status::text,service_point_id,clinician_id,started_at,ended_at,created_at,updated_at"
 
 func scanEncounter(row pgx.Row) (*clinical.Encounter, error) {
 	var x clinical.Encounter
-	e := row.Scan(&x.ID, &x.VisitID, &x.EncounterType, &x.Status, &x.ServicePointID, &x.ClinicianID, &x.StartedAt, &x.EndedAt, &x.CreatedAt)
+	e := row.Scan(&x.ID, &x.VisitID, &x.EncounterType, &x.Status, &x.ServicePointID, &x.ClinicianID, &x.StartedAt, &x.EndedAt, &x.CreatedAt, &x.UpdatedAt)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil, clinical.ErrNotFound
 	}
@@ -65,11 +126,11 @@ func (r *Repository) CreateEncounterWithForm(c context.Context, x clinical.Encou
 		WHERE t.encounter_type=$4 AND t.is_default AND t.archived_at IS NULL
 	), inserted_encounter AS (
 		INSERT INTO clinical_encounters(id,visit_id,service_point_id,encounter_type,status,clinician_id,started_at)
-		SELECT $1,$2,$3,$4,$5,$6,$7 FROM selected RETURNING id,visit_id,encounter_type,status,service_point_id,clinician_id,started_at,ended_at,created_at
+		SELECT $1,$2,$3,$4,$5,$6,$7 FROM selected RETURNING id,visit_id,encounter_type,status,service_point_id,clinician_id,started_at,ended_at,created_at,updated_at
 	), inserted_form AS (
 		INSERT INTO clinical_encounter_forms(id,encounter_id,template_version_id,saved_by)
 		SELECT $8,e.id,s.version_id,$9 FROM inserted_encounter e CROSS JOIN selected s RETURNING encounter_id
-	) SELECT e.id,e.visit_id,e.encounter_type::text,e.status::text,e.service_point_id,e.clinician_id,e.started_at,e.ended_at,e.created_at
+	) SELECT e.id,e.visit_id,e.encounter_type::text,e.status::text,e.service_point_id,e.clinician_id,e.started_at,e.ended_at,e.created_at,e.updated_at
 	FROM inserted_encounter e JOIN inserted_form f ON f.encounter_id=e.id`, x.ID, x.VisitID, x.ServicePointID, x.EncounterType, x.Status, x.ClinicianID, x.StartedAt, formID, actor)
 	created, err := scanEncounter(row)
 	if errors.Is(err, clinical.ErrNotFound) {

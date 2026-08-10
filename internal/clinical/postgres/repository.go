@@ -340,17 +340,17 @@ func (r *Repository) ReactivateResource(c context.Context, k, id string) (*clini
 
 func scanVisit(row pgx.Row) (*clinical.Visit, error) {
 	var x clinical.Visit
-	err := row.Scan(&x.ID, &x.PatientID, &x.VisitType, &x.Status, &x.Reason, &x.StartedAt, &x.EndedAt, &x.CreatedBy, &x.CreatedAt)
+	err := row.Scan(&x.ID, &x.PatientID, &x.VisitType, &x.Status, &x.Reason, &x.ServicePointID, &x.StartedAt, &x.EndedAt, &x.CreatedBy, &x.CreatedAt, &x.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, clinical.ErrNotFound
 	}
 	return &x, err
 }
 
-const visitCols = "id,patient_id,visit_type::text,status::text,reason,started_at,ended_at,created_by,created_at"
+const visitCols = "id,patient_id,visit_type::text,status::text,reason,service_point_id,started_at,ended_at,created_by,created_at,updated_at"
 
 func (r *Repository) CreateVisit(c context.Context, x clinical.Visit) (*clinical.Visit, error) {
-	return scanVisit(r.exec(c).QueryRow(c, "INSERT INTO clinical_visits(id,patient_id,visit_type,status,reason,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING "+visitCols, x.ID, x.PatientID, x.VisitType, x.Status, x.Reason, x.CreatedBy))
+	return scanVisit(r.exec(c).QueryRow(c, "INSERT INTO clinical_visits(id,patient_id,visit_type,status,reason,service_point_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING "+visitCols, x.ID, x.PatientID, x.VisitType, x.Status, x.Reason, x.ServicePointID, x.CreatedBy))
 }
 func (r *Repository) GetVisit(c context.Context, id string) (*clinical.Visit, error) {
 	return scanVisit(r.exec(c).QueryRow(c, "SELECT "+visitCols+" FROM clinical_visits WHERE id=$1", id))
@@ -360,42 +360,31 @@ func (r *Repository) ApplyVisitRouting(c context.Context, v clinical.Visit) erro
 	if e != nil {
 		return e
 	}
-	_, e = r.exec(c).Exec(c, "INSERT INTO clinical_outbox(id,event_type,aggregate_type,aggregate_id,payload,status,processed_at) VALUES($1,'visit.created','visit',$2,jsonb_build_object('patient_id',$3),'processed',now())", outboxID, v.ID, v.PatientID)
+	_, e = r.exec(c).Exec(c, "INSERT INTO clinical_outbox(id,event_type,aggregate_type,aggregate_id,payload,status,processed_at) VALUES($1,'visit.created','visit',$2,jsonb_build_object('patient_id',$3::uuid),'processed',now())", outboxID, v.ID, v.PatientID)
 	if e != nil {
 		return e
 	}
-	rows, e := r.exec(c).Query(c, "SELECT target_queue_id,priority FROM queue_routing_rules WHERE active AND event_type='visit.created' AND (visit_type IS NULL OR visit_type=$1::clinical_visit_type)", v.VisitType)
+	var queueID string
+	var priority int16
+	e = r.exec(c).QueryRow(c, `SELECT target_queue_id,priority FROM queue_routing_rules
+		WHERE active AND event_type='visit.created' AND (visit_type IS NULL OR visit_type=$1::clinical_visit_type)
+		ORDER BY (visit_type IS NOT NULL) DESC, priority DESC, id LIMIT 1`, v.VisitType).Scan(&queueID, &priority)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return clinical.ErrRoutingMissing
+	}
 	if e != nil {
 		return e
 	}
-	defer rows.Close()
-	type rule struct {
-		q string
-		p int16
-	}
-	var rules []rule
-	for rows.Next() {
-		var x rule
-		if e = rows.Scan(&x.q, &x.p); e != nil {
-			return e
-		}
-		rules = append(rules, x)
-	}
-	if e = rows.Err(); e != nil {
+	id, _ := utility.GenerateUUID()
+	hist, _ := utility.GenerateUUID()
+	tag, e := r.exec(c).Exec(c, "INSERT INTO queue_entries(id,queue_id,subject_type,subject_id,patient_id,status,priority) VALUES($1,$2,'visit',$3,$4,'waiting',$5) ON CONFLICT DO NOTHING", id, queueID, v.ID, v.PatientID, priority)
+	if e != nil {
 		return e
 	}
-	for _, rule := range rules {
-		id, _ := utility.GenerateUUID()
-		hist, _ := utility.GenerateUUID()
-		tag, e := r.exec(c).Exec(c, "INSERT INTO queue_entries(id,queue_id,subject_type,subject_id,patient_id,status,priority) VALUES($1,$2,'visit',$3,$4,'waiting',$5) ON CONFLICT DO NOTHING", id, rule.q, v.ID, v.PatientID, rule.p)
+	if tag.RowsAffected() > 0 {
+		_, e = r.exec(c).Exec(c, "INSERT INTO queue_entry_history(id,queue_entry_id,to_status,to_queue_id,automated,reason) VALUES($1,$2,'waiting',$3,true,'Automatic visit routing')", hist, id, queueID)
 		if e != nil {
 			return e
-		}
-		if tag.RowsAffected() > 0 {
-			_, e = r.exec(c).Exec(c, "INSERT INTO queue_entry_history(id,queue_entry_id,to_status,to_queue_id,automated,reason) VALUES($1,$2,'waiting',$3,true,'Automatic visit routing')", hist, id, rule.q)
-			if e != nil {
-				return e
-			}
 		}
 	}
 	return nil
@@ -481,7 +470,7 @@ func (r *Repository) ListQueueHistory(c context.Context, id string) ([]clinical.
 	return out, rows.Err()
 }
 func (r *Repository) ListRoutingRules(c context.Context) ([]clinical.RoutingRule, error) {
-	rows, e := r.exec(c).Query(c, "SELECT id,name,event_type,visit_type::text,target_queue_id,priority,active FROM queue_routing_rules ORDER BY name")
+	rows, e := r.exec(c).Query(c, "SELECT id,name,event_type,visit_type::text,encounter_type::text,order_kind,service_category,target_queue_id,priority,active FROM queue_routing_rules ORDER BY name")
 	if e != nil {
 		return nil, e
 	}
@@ -489,7 +478,7 @@ func (r *Repository) ListRoutingRules(c context.Context) ([]clinical.RoutingRule
 	out := []clinical.RoutingRule{}
 	for rows.Next() {
 		var x clinical.RoutingRule
-		if e = rows.Scan(&x.ID, &x.Name, &x.EventType, &x.VisitType, &x.TargetQueueID, &x.Priority, &x.Active); e != nil {
+		if e = rows.Scan(&x.ID, &x.Name, &x.EventType, &x.VisitType, &x.EncounterType, &x.OrderKind, &x.ServiceCategory, &x.TargetQueueID, &x.Priority, &x.Active); e != nil {
 			return nil, e
 		}
 		out = append(out, x)
@@ -497,8 +486,8 @@ func (r *Repository) ListRoutingRules(c context.Context) ([]clinical.RoutingRule
 	return out, rows.Err()
 }
 func (r *Repository) CreateRoutingRule(c context.Context, x clinical.RoutingRule) (*clinical.RoutingRule, error) {
-	e := r.exec(c).QueryRow(c, "INSERT INTO queue_routing_rules(id,name,event_type,visit_type,target_queue_id,priority) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,event_type,visit_type::text,target_queue_id,priority,active", x.ID, x.Name, x.EventType, x.VisitType, x.TargetQueueID, x.Priority).Scan(&x.ID, &x.Name, &x.EventType, &x.VisitType, &x.TargetQueueID, &x.Priority, &x.Active)
-	return &x, e
+	e := r.exec(c).QueryRow(c, "INSERT INTO queue_routing_rules(id,name,event_type,visit_type,encounter_type,order_kind,service_category,target_queue_id,priority) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,name,event_type,visit_type::text,encounter_type::text,order_kind,service_category,target_queue_id,priority,active", x.ID, x.Name, x.EventType, x.VisitType, x.EncounterType, x.OrderKind, x.ServiceCategory, x.TargetQueueID, x.Priority).Scan(&x.ID, &x.Name, &x.EventType, &x.VisitType, &x.EncounterType, &x.OrderKind, &x.ServiceCategory, &x.TargetQueueID, &x.Priority, &x.Active)
+	return &x, normalizeResourceError(e)
 }
 func (r *Repository) SearchConcepts(c context.Context, q string, limit int) ([]clinical.Concept, error) {
 	like := "%" + q + "%"

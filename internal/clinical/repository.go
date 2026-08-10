@@ -63,6 +63,7 @@ type Repository interface {
 	GetActiveAllergen(context.Context, string) (*Allergen, error)
 	FindActiveOutpatientVisit(context.Context, string) (*Visit, error)
 	ListVisits(context.Context, string, string) ([]Visit, error)
+	ListOutpatientVisitItems(context.Context, OutpatientVisitFilters) ([]OutpatientVisitListItem, int, error)
 	CreateEncounter(context.Context, Encounter) (*Encounter, error)
 	CreateEncounterWithForm(context.Context, Encounter, string, string) (*Encounter, error)
 	GetEncounter(context.Context, string) (*Encounter, error)
@@ -77,4 +78,12 @@ type Repository interface {
 	CreateAllergy(context.Context, Allergy) (*Allergy, error)
 	ListAllergies(context.Context, string) ([]Allergy, error)
 	CompleteVisit(context.Context, string) (*Visit, error)
+	GetCurrentVisitQueueEntry(context.Context, string) (*QueueEntry, error)
+	ApplyEventRouting(context.Context, string, string, string, string, string, string, *string) error
+	CreateOrder(context.Context, ClinicalOrder) (*ClinicalOrder, error)
+	GetOrder(context.Context, string) (*ClinicalOrder, error)
+	ListOrders(context.Context, OrderFilters) ([]ClinicalOrder, int, error)
+	TransitionOrder(context.Context, ClinicalOrder, string, string) (*ClinicalOrder, error)
+	HasActiveMedicationAllergy(context.Context, string) (bool, error)
+	HasUnresolvedReviewOrders(context.Context, string) (bool, error)
 }

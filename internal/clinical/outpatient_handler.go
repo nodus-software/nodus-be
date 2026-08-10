@@ -2,6 +2,7 @@ package clinical
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -49,18 +50,41 @@ func (h *Handler) OutpatientCheckInOverride(w http.ResponseWriter, r *http.Reque
 	})
 }
 func (h *Handler) ListOutpatientVisits(w http.ResponseWriter, r *http.Request) {
-	x, e := h.service.ListOutpatientVisits(r.Context(), strings.TrimSpace(r.URL.Query().Get("status")))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	per, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	f := OutpatientVisitFilters{Date: strings.TrimSpace(r.URL.Query().Get("date")), Status: strings.TrimSpace(r.URL.Query().Get("status")), Stage: strings.TrimSpace(r.URL.Query().Get("stage")), ServicePointID: strings.TrimSpace(r.URL.Query().Get("service_point_id")), ClinicianID: strings.TrimSpace(r.URL.Query().Get("clinician_id")), Query: strings.TrimSpace(r.URL.Query().Get("q")), Page: page, PerPage: per}
+	x, total, e := h.service.ListOutpatientVisits(r.Context(), f)
 	if e != nil {
 		h.fail(w, e)
 		return
 	}
-	response.OK(w, x)
+	if page < 1 {
+		page = 1
+	}
+	if per < 1 || per > 100 {
+		per = 25
+	}
+	response.Paginated(w, x, response.NewMeta(page, per, total))
 }
 func (h *Handler) CreateEncounter(w http.ResponseWriter, r *http.Request) {
 	q, ok := bind[CreateEncounterRequest](w, r)
 	if !ok {
 		return
 	}
+	h.withActor(w, r, func(a string) error {
+		x, e := h.service.CreateEncounter(r.Context(), a, chi.URLParam(r, "visitId"), q)
+		if e == nil {
+			response.Created(w, x)
+		}
+		return e
+	})
+}
+func (h *Handler) CreateEncounterOverride(w http.ResponseWriter, r *http.Request) {
+	q, ok := bind[CreateEncounterRequest](w, r)
+	if !ok {
+		return
+	}
+	q.Override = true
 	h.withActor(w, r, func(a string) error {
 		x, e := h.service.CreateEncounter(r.Context(), a, chi.URLParam(r, "visitId"), q)
 		if e == nil {
@@ -151,13 +175,39 @@ func (h *Handler) ListAllergies(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, x)
 }
 func (h *Handler) CompleteVisit(w http.ResponseWriter, r *http.Request) {
+	q, ok := bind[CompleteVisitRequest](w, r)
+	if !ok {
+		return
+	}
 	h.withActor(w, r, func(a string) error {
-		x, e := h.service.CompleteVisit(r.Context(), a, chi.URLParam(r, "visitId"))
+		x, e := h.service.CompleteVisit(r.Context(), a, chi.URLParam(r, "visitId"), q)
 		if e == nil {
 			response.OK(w, x)
 		}
 		return e
 	})
+}
+func (h *Handler) CompleteVisitOverride(w http.ResponseWriter, r *http.Request) {
+	q, ok := bind[CompleteVisitRequest](w, r)
+	if !ok {
+		return
+	}
+	q.Override = true
+	h.withActor(w, r, func(a string) error {
+		x, e := h.service.CompleteVisit(r.Context(), a, chi.URLParam(r, "visitId"), q)
+		if e == nil {
+			response.OK(w, x)
+		}
+		return e
+	})
+}
+func (h *Handler) VisitContext(w http.ResponseWriter, r *http.Request) {
+	x, e := h.service.OutpatientVisitContext(r.Context(), chi.URLParam(r, "visitId"))
+	if e != nil {
+		h.fail(w, e)
+		return
+	}
+	response.OK(w, x)
 }
 func (h *Handler) VisitSummary(w http.ResponseWriter, r *http.Request) {
 	x, e := h.service.VisitSummary(r.Context(), chi.URLParam(r, "visitId"))

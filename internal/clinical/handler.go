@@ -34,6 +34,7 @@ func bind[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 func (h *Handler) fail(w http.ResponseWriter, e error) {
 	var lifecycle *LifecycleConflictError
 	var formValidation *FormValidationError
+	var activeVisit *ActiveVisitConflictError
 	switch {
 	case errors.Is(e, ErrNotFound):
 		response.NotFound(w, e.Error())
@@ -41,7 +42,9 @@ func (h *Handler) fail(w http.ResponseWriter, e error) {
 		response.ErrorWithDetails(w, http.StatusConflict, "CONFIGURATION_CONFLICT", e.Error(), lifecycle.Impact)
 	case errors.As(e, &formValidation):
 		response.ErrorWithDetails(w, http.StatusUnprocessableEntity, "FORM_VALIDATION_FAILED", e.Error(), formValidation.Errors)
-	case errors.Is(e, ErrConflict), errors.Is(e, ErrActiveVisit), errors.Is(e, ErrInactiveParent):
+	case errors.As(e, &activeVisit):
+		response.ErrorWithDetails(w, http.StatusConflict, "ACTIVE_VISIT_CONFLICT", e.Error(), activeVisit)
+	case errors.Is(e, ErrConflict), errors.Is(e, ErrActiveVisit), errors.Is(e, ErrInactiveParent), errors.Is(e, ErrRoutingMissing):
 		response.Conflict(w, e.Error())
 	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired), errors.Is(e, ErrVisitIncomplete), errors.Is(e, ErrFormIncomplete):
 		response.Validation(w, map[string]string{"error": e.Error()})

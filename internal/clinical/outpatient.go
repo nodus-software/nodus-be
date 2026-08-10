@@ -19,24 +19,28 @@ func (s *Service) OutpatientCheckIn(c context.Context, actor string, q Outpatien
 	}
 	if active != nil {
 		if !q.Override {
-			return nil, ErrActiveVisit
+			entry, _ := s.repo.GetCurrentVisitQueueEntry(c, active.ID)
+			return nil, &ActiveVisitConflictError{Visit: *active, QueueEntry: entry}
 		}
 		if q.OverrideReason == nil || strings.TrimSpace(*q.OverrideReason) == "" {
 			return nil, ErrReasonRequired
 		}
 	}
-	v, err := s.CreateVisit(c, actor, CreateVisitRequest{PatientID: q.PatientID, VisitType: "outpatient", Reason: q.Reason})
+	v, err := s.CreateVisit(c, actor, CreateVisitRequest{PatientID: q.PatientID, VisitType: "outpatient", Reason: q.Reason, ServicePointID: q.ServicePointID})
 	if err == nil && active != nil && s.audit != nil {
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "outpatient_duplicate_visit_overridden", Result: audit.ResultSuccess, TargetResource: v.ID, Metadata: map[string]any{"existing_visit_id": active.ID, "reason": strings.TrimSpace(*q.OverrideReason)}})
 	}
 	return v, err
 }
 
-func (s *Service) ListOutpatientVisits(c context.Context, status string) ([]Visit, error) {
-	if status != "" && !map[string]bool{"active": true, "completed": true, "cancelled": true}[status] {
-		return nil, ErrInvalidInput
+func (s *Service) ListOutpatientVisits(c context.Context, f OutpatientVisitFilters) ([]OutpatientVisitListItem, int, error) {
+	if f.Status != "" && !map[string]bool{"active": true, "completed": true, "cancelled": true}[f.Status] {
+		return nil, 0, ErrInvalidInput
 	}
-	return s.repo.ListVisits(c, "outpatient", status)
+	if f.Stage != "" && !map[string]bool{"checked_in": true, "triage": true, "consultation": true, "completed": true, "cancelled": true}[f.Stage] {
+		return nil, 0, ErrInvalidInput
+	}
+	return s.repo.ListOutpatientVisitItems(c, f)
 }
 func (s *Service) ListEncounters(c context.Context, visitID string) ([]Encounter, error) {
 	if visitID == "" {
@@ -61,6 +65,26 @@ func (s *Service) CreateEncounter(c context.Context, actor, visitID string, q Cr
 	}
 	if v.VisitType != "outpatient" || v.Status != "active" {
 		return nil, ErrInvalidTransition
+	}
+	if q.EncounterType == "consultation" {
+		encounters, e := s.repo.ListEncounters(c, visitID)
+		if e != nil {
+			return nil, e
+		}
+		triageComplete := false
+		for _, item := range encounters {
+			if item.EncounterType == "triage" && item.Status == "completed" {
+				triageComplete = true
+			}
+		}
+		if !triageComplete {
+			if !q.Override {
+				return nil, ErrInvalidTransition
+			}
+			if strings.TrimSpace(value(q.OverrideReason)) == "" {
+				return nil, ErrReasonRequired
+			}
+		}
 	}
 	id, err := utility.GenerateUUID()
 	if err != nil {
@@ -119,8 +143,8 @@ func (s *Service) CompleteEncounter(c context.Context, actor, id string, q Compl
 	if e.Status != "in_progress" {
 		return nil, ErrInvalidTransition
 	}
-	if e.EncounterType == "triage" && (q.ConsultationQueueID == nil || *q.ConsultationQueueID == "") {
-		return nil, ErrInvalidInput
+	if q.ExpectedUpdatedAt != nil && !e.UpdatedAt.Equal(*q.ExpectedUpdatedAt) {
+		return nil, ErrConflict
 	}
 	form, err := s.repo.GetEncounterForm(c, id)
 	if err != nil {
@@ -129,7 +153,14 @@ func (s *Service) CompleteEncounter(c context.Context, actor, id string, q Compl
 	if form.Status != "submitted" {
 		return nil, ErrFormIncomplete
 	}
-	x, err := s.repo.CompleteEncounter(c, id, actor, q.ConsultationQueueID)
+	x, err := s.repo.CompleteEncounter(c, id, actor, nil)
+	if err == nil && e.EncounterType == "triage" {
+		v, vErr := s.repo.GetVisit(c, e.VisitID)
+		if vErr != nil {
+			return nil, vErr
+		}
+		err = s.repo.ApplyEventRouting(c, "encounter.completed", "visit", e.VisitID, v.PatientID, v.VisitType, "triage", &actor)
+	}
 	if err == nil && s.audit != nil {
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_encounter_completed", Result: audit.ResultSuccess, TargetResource: id})
 	}
@@ -226,13 +257,16 @@ func (s *Service) CreateAllergy(c context.Context, actor, patientID string, q Cr
 	}
 	return created, e
 }
-func (s *Service) CompleteVisit(c context.Context, actor, id string) (*Visit, error) {
+func (s *Service) CompleteVisit(c context.Context, actor, id string, q CompleteVisitRequest) (*Visit, error) {
 	v, err := s.repo.GetVisit(c, id)
 	if err != nil {
 		return nil, err
 	}
 	if v.Status != "active" {
 		return nil, ErrInvalidTransition
+	}
+	if q.ExpectedUpdatedAt != nil && !v.UpdatedAt.Equal(*q.ExpectedUpdatedAt) {
+		return nil, ErrConflict
 	}
 	enc, err := s.repo.ListEncounters(c, id)
 	if err != nil {
@@ -261,11 +295,57 @@ func (s *Service) CompleteVisit(c context.Context, actor, id string) (*Visit, er
 	if !hasFinal {
 		return nil, ErrVisitIncomplete
 	}
+	pending, err := s.repo.HasUnresolvedReviewOrders(c, id)
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		if !q.Override {
+			return nil, ErrVisitIncomplete
+		}
+		if strings.TrimSpace(value(q.OverrideReason)) == "" {
+			return nil, ErrReasonRequired
+		}
+	}
 	x, err := s.repo.CompleteVisit(c, id)
 	if err == nil && s.audit != nil {
-		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_visit_completed", Result: audit.ResultSuccess, TargetResource: id})
+		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_visit_completed", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"order_override": pending, "reason": value(q.OverrideReason)}})
 	}
 	return x, err
+}
+
+func (s *Service) OutpatientVisitContext(c context.Context, id string) (*OutpatientVisitContext, error) {
+	v, e := s.repo.GetVisit(c, id)
+	if e != nil {
+		return nil, e
+	}
+	enc, e := s.repo.ListEncounters(c, id)
+	if e != nil {
+		return nil, e
+	}
+	all, e := s.repo.ListAllergies(c, v.PatientID)
+	if e != nil {
+		return nil, e
+	}
+	orders, _, e := s.repo.ListOrders(c, OrderFilters{VisitID: id, Page: 1, PerPage: 100})
+	if e != nil {
+		return nil, e
+	}
+	entry, _ := s.repo.GetCurrentVisitQueueEntry(c, id)
+	stage := "checked_in"
+	if v.Status == "completed" || v.Status == "cancelled" {
+		stage = v.Status
+	} else {
+		for _, x := range enc {
+			if x.EncounterType == "triage" {
+				stage = "triage"
+			}
+			if x.EncounterType == "consultation" {
+				stage = "consultation"
+			}
+		}
+	}
+	return &OutpatientVisitContext{Visit: *v, CurrentQueueEntry: entry, Encounters: enc, Allergies: all, Orders: orders, WorkflowStage: stage}, nil
 }
 func (s *Service) VisitSummary(c context.Context, id string) (*VisitSummary, error) {
 	v, e := s.repo.GetVisit(c, id)

@@ -148,7 +148,7 @@ func (s *Service) CreateVisit(c context.Context, actor string, q CreateVisitRequ
 	if e != nil {
 		return nil, e
 	}
-	v, e := s.repo.CreateVisit(c, Visit{ID: id, PatientID: q.PatientID, VisitType: q.VisitType, Status: "active", Reason: q.Reason, CreatedBy: actor})
+	v, e := s.repo.CreateVisit(c, Visit{ID: id, PatientID: q.PatientID, VisitType: q.VisitType, Status: "active", Reason: q.Reason, ServicePointID: q.ServicePointID, CreatedBy: actor})
 	if e != nil {
 		return nil, e
 	}
@@ -227,14 +227,23 @@ func (s *Service) ListRoutingRules(c context.Context) ([]RoutingRule, error) {
 	return s.repo.ListRoutingRules(c)
 }
 func (s *Service) CreateRoutingRule(c context.Context, actor string, q CreateRoutingRuleRequest) (*RoutingRule, error) {
-	if strings.TrimSpace(q.Name) == "" || q.EventType != "visit.created" || q.TargetQueueID == "" || q.Priority < 0 || q.Priority > 100 {
+	if strings.TrimSpace(q.Name) == "" || !map[string]bool{"visit.created": true, "encounter.completed": true, "order.created": true, "order.review_ready": true}[q.EventType] || q.TargetQueueID == "" || q.Priority < 0 || q.Priority > 100 {
+		return nil, ErrInvalidInput
+	}
+	if q.VisitType != nil && !map[string]bool{"test": true, "outpatient": true, "emergency": true, "specialty": true}[*q.VisitType] {
+		return nil, ErrInvalidInput
+	}
+	if q.EncounterType != nil && !map[string]bool{"triage": true, "consultation": true, "ward_round": true, "nursing": true, "other": true}[*q.EncounterType] {
+		return nil, ErrInvalidInput
+	}
+	if q.OrderKind != nil && !map[string]bool{"service": true, "medication": true}[*q.OrderKind] {
 		return nil, ErrInvalidInput
 	}
 	id, e := utility.GenerateUUID()
 	if e != nil {
 		return nil, e
 	}
-	x, e := s.repo.CreateRoutingRule(c, RoutingRule{ID: id, Name: q.Name, EventType: q.EventType, VisitType: q.VisitType, TargetQueueID: q.TargetQueueID, Priority: q.Priority, Active: true})
+	x, e := s.repo.CreateRoutingRule(c, RoutingRule{ID: id, Name: q.Name, EventType: q.EventType, VisitType: q.VisitType, EncounterType: q.EncounterType, OrderKind: q.OrderKind, ServiceCategory: q.ServiceCategory, TargetQueueID: q.TargetQueueID, Priority: q.Priority, Active: true})
 	if e == nil {
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "queue_routing_rule_created", Result: audit.ResultSuccess, TargetResource: id})
 	}

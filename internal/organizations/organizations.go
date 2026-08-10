@@ -145,6 +145,9 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 	if err = seedClinicalTemplates(ctx, tx); err != nil {
 		return nil, err
 	}
+	if err = seedDefaultOutpatientConfiguration(ctx, tx); err != nil {
+		return nil, err
+	}
 	auditID, _ := utility.GenerateUUID()
 	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,tenant_id,user_id,action,result) VALUES($1,$2,NULL,'organization_registered','success')`, auditID, tenantID); err != nil {
 		return nil, err
@@ -246,6 +249,52 @@ func seedClinicalTemplates(ctx context.Context, tx interface {
 		}
 	}
 	return nil
+}
+
+func seedDefaultOutpatientConfiguration(ctx context.Context, tx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}) error {
+	_, err := tx.Exec(ctx, `
+		WITH departments_seed(code, name, description) AS (VALUES
+			('OPD', 'Outpatient Department', 'Default outpatient clinical services'),
+			('LAB', 'Laboratory Department', 'Default diagnostic laboratory services'),
+			('PHARM', 'Pharmacy Department', 'Default medication dispensing services')
+		)
+		INSERT INTO departments(id, code, name, description)
+		SELECT gen_random_uuid(), code, name, description FROM departments_seed;
+
+		WITH service_points_seed(department_code, code, name, kind) AS (VALUES
+			('OPD', 'OPD-TRIAGE', 'Outpatient Triage', 'triage'),
+			('OPD', 'OPD-CONSULT', 'General Consultation', 'consultation'),
+			('LAB', 'LAB-MAIN', 'Main Laboratory', 'laboratory'),
+			('PHARM', 'PHARM-MAIN', 'Main Pharmacy', 'pharmacy')
+		)
+		INSERT INTO service_points(id, department_id, code, name, kind)
+		SELECT gen_random_uuid(), d.id, s.code, s.name, s.kind
+		FROM service_points_seed s JOIN departments d ON d.code=s.department_code;
+
+		WITH queues_seed(service_point_code, code, name) AS (VALUES
+			('OPD-TRIAGE', 'OPD-TRIAGE-Q', 'Outpatient Triage Queue'),
+			('OPD-CONSULT', 'OPD-CONSULT-Q', 'General Consultation Queue'),
+			('LAB-MAIN', 'LAB-Q', 'Laboratory Orders Queue'),
+			('PHARM-MAIN', 'PHARM-Q', 'Prescription Queue')
+		)
+		INSERT INTO queues(id, service_point_id, code, name)
+		SELECT gen_random_uuid(), sp.id, s.code, s.name
+		FROM queues_seed s JOIN service_points sp ON sp.code=s.service_point_code;
+
+		WITH rules(name, event_type, visit_type, encounter_type, order_kind, service_category, queue_code, priority) AS (VALUES
+			('Default outpatient check-in to triage', 'visit.created', 'outpatient', NULL, NULL, NULL, 'OPD-TRIAGE-Q', 0::smallint),
+			('Default completed triage to consultation', 'encounter.completed', 'outpatient', 'triage', NULL, NULL, 'OPD-CONSULT-Q', 0::smallint),
+			('Default laboratory order routing', 'order.created', NULL, NULL, 'service', 'laboratory', 'LAB-Q', 0::smallint),
+			('Default medication order routing', 'order.created', NULL, NULL, 'medication', 'pharmacy', 'PHARM-Q', 0::smallint),
+			('Default reviewed order to consultation', 'order.review_ready', 'outpatient', NULL, NULL, NULL, 'OPD-CONSULT-Q', 0::smallint)
+		)
+		INSERT INTO queue_routing_rules(id, name, event_type, visit_type, encounter_type, order_kind, service_category, target_queue_id, priority)
+		SELECT gen_random_uuid(), r.name, r.event_type, r.visit_type::clinical_visit_type,
+		       r.encounter_type::clinical_encounter_type, r.order_kind, r.service_category, q.id, r.priority
+		FROM rules r JOIN queues q ON q.code=r.queue_code`)
+	return err
 }
 
 func (s *Service) Current(ctx context.Context) (*Organization, error) {

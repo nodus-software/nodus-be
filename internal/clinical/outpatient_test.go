@@ -44,6 +44,15 @@ func (r *outpatientRepo) FindActiveOutpatientVisit(context.Context, string) (*Vi
 	}
 	return r.active, nil
 }
+func (r *outpatientRepo) GetCurrentVisitQueueEntry(context.Context, string) (*QueueEntry, error) {
+	return nil, ErrNotFound
+}
+func (r *outpatientRepo) HasUnresolvedReviewOrders(context.Context, string) (bool, error) {
+	return false, nil
+}
+func (r *outpatientRepo) ApplyEventRouting(context.Context, string, string, string, string, string, string, *string) error {
+	return nil
+}
 func (r *outpatientRepo) CreateVisit(_ context.Context, v Visit) (*Visit, error) {
 	r.created = &v
 	return &v, nil
@@ -56,6 +65,10 @@ func (r *outpatientRepo) GetVisit(context.Context, string) (*Visit, error) {
 	return &Visit{ID: "visit", PatientID: "patient", VisitType: "outpatient", Status: "active"}, nil
 }
 func (r *outpatientRepo) GetEncounter(context.Context, string) (*Encounter, error) {
+	return r.encounter, nil
+}
+func (r *outpatientRepo) CompleteEncounter(_ context.Context, id, actor string, _ *string) (*Encounter, error) {
+	r.encounter.Status = "completed"
 	return r.encounter, nil
 }
 func (r *outpatientRepo) GetEncounterForm(context.Context, string) (*EncounterForm, error) {
@@ -148,12 +161,12 @@ func TestRecordObservationsRejectsAmbiguousValue(t *testing.T) {
 		t.Fatal("invalid observations must not persist")
 	}
 }
-func TestCompleteTriageRequiresConsultationQueue(t *testing.T) {
+func TestCompleteTriageUsesConfiguredRouting(t *testing.T) {
 	r := &outpatientRepo{encounter: &Encounter{ID: "enc", EncounterType: "triage", Status: "in_progress"}}
 	s := NewService(r, noopAudit{})
 	_, err := s.CompleteEncounter(context.Background(), "actor", "enc", CompleteEncounterRequest{})
-	if !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("expected consultation queue validation, got %v", err)
+	if err != nil {
+		t.Fatalf("expected configured routing, got %v", err)
 	}
 }
 func TestCompleteEncounterRequiresSubmittedTemplate(t *testing.T) {
@@ -165,7 +178,7 @@ func TestCompleteEncounterRequiresSubmittedTemplate(t *testing.T) {
 	}
 }
 func TestCreateEncounterPinsDefaultTemplateForm(t *testing.T) {
-	r := &outpatientRepo{}
+	r := &outpatientRepo{encounters: []Encounter{{EncounterType: "triage", Status: "completed"}}}
 	s := NewService(r, noopAudit{})
 	x, err := s.CreateEncounter(context.Background(), "actor", "visit", CreateEncounterRequest{EncounterType: "consultation"})
 	if err != nil {
@@ -178,7 +191,7 @@ func TestCreateEncounterPinsDefaultTemplateForm(t *testing.T) {
 func TestCompleteVisitRequiresCompletedConsultation(t *testing.T) {
 	r := &outpatientRepo{encounters: []Encounter{{EncounterType: "triage", Status: "completed"}}}
 	s := NewService(r, noopAudit{})
-	_, err := s.CompleteVisit(context.Background(), "actor", "visit")
+	_, err := s.CompleteVisit(context.Background(), "actor", "visit", CompleteVisitRequest{})
 	if !errors.Is(err, ErrVisitIncomplete) {
 		t.Fatalf("expected incomplete visit, got %v", err)
 	}
@@ -189,7 +202,7 @@ func TestCompleteVisitRequiresCompletedConsultation(t *testing.T) {
 func TestCompleteVisitAfterConsultation(t *testing.T) {
 	r := &outpatientRepo{encounters: []Encounter{{EncounterType: "consultation", Status: "completed"}}, diagnoses: []Diagnosis{{Kind: "final"}}}
 	s := NewService(r, noopAudit{})
-	v, err := s.CompleteVisit(context.Background(), "actor", "visit")
+	v, err := s.CompleteVisit(context.Background(), "actor", "visit", CompleteVisitRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +213,7 @@ func TestCompleteVisitAfterConsultation(t *testing.T) {
 func TestCompleteVisitRequiresFinalDiagnosis(t *testing.T) {
 	r := &outpatientRepo{encounters: []Encounter{{EncounterType: "consultation", Status: "completed"}}}
 	s := NewService(r, noopAudit{})
-	_, err := s.CompleteVisit(context.Background(), "actor", "visit")
+	_, err := s.CompleteVisit(context.Background(), "actor", "visit", CompleteVisitRequest{})
 	if !errors.Is(err, ErrVisitIncomplete) {
 		t.Fatalf("expected final diagnosis requirement, got %v", err)
 	}
