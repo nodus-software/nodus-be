@@ -69,6 +69,7 @@ jobs:
       - name: Test with race detector
         env:
           CGO_ENABLED: "1"
+          TEST_DATABASE_URL: postgres://nodus:nodus@127.0.0.1:5432/nodus_ci?sslmode=disable
         run: go test -race ./...
 
       - name: Build commands
@@ -89,7 +90,7 @@ jobs:
         run: |
           go run ./cmd/migrate
           version="$(psql --host 127.0.0.1 --username nodus --dbname nodus_ci --tuples-only --no-align --command 'SELECT version FROM schema_migrations')"
-          test "${version}" = "12"
+          test "${version}" = "22"
 
   package:
     name: Publish image

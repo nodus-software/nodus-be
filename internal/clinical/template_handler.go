@@ -99,6 +99,9 @@ func (h *Handler) GetEncounterForm(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, x)
 }
 func (h *Handler) SaveEncounterForm(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEncounterPermission(w, r, chi.URLParam(r, "encounterId")) {
+		return
+	}
 	q, ok := bind[SaveEncounterFormRequest](w, r)
 	if !ok {
 		return
@@ -112,6 +115,9 @@ func (h *Handler) SaveEncounterForm(w http.ResponseWriter, r *http.Request) {
 	})
 }
 func (h *Handler) SubmitEncounterForm(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEncounterPermission(w, r, chi.URLParam(r, "encounterId")) {
+		return
+	}
 	q, ok := bind[SubmitEncounterFormRequest](w, r)
 	if !ok {
 		return

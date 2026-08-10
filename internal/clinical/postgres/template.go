@@ -103,8 +103,11 @@ func (r *Repository) CreateTemplate(c context.Context, x clinical.ClinicalTempla
 	if e != nil {
 		return rollback(normalizeResourceError(e))
 	}
-	raw, _ := json.Marshal(v.Definition)
-	_, e = exec.Exec(c, "INSERT INTO clinical_template_versions(id,template_id,version,status,definition,created_by) VALUES($1,$2,1,'draft',$3,$4)", v.ID, x.ID, raw, v.CreatedBy)
+	raw, e := json.Marshal(v.Definition)
+	if e != nil {
+		return rollback(e)
+	}
+	_, e = exec.Exec(c, "INSERT INTO clinical_template_versions(id,template_id,version,status,definition,created_by) VALUES($1,$2,1,'draft',$3,$4)", v.ID, x.ID, string(raw), v.CreatedBy)
 	if e != nil {
 		return rollback(normalizeResourceError(e))
 	}
@@ -129,9 +132,12 @@ func (r *Repository) CreateTemplateDraft(c context.Context, id, versionID, actor
 }
 
 func (r *Repository) UpdateTemplateDraft(c context.Context, id, actor string, q clinical.UpdateTemplateDraftRequest) (*clinical.ClinicalTemplate, error) {
-	raw, _ := json.Marshal(q.Definition)
+	raw, e := json.Marshal(q.Definition)
+	if e != nil {
+		return nil, e
+	}
 	tag, e := r.exec(c).Exec(c, `WITH updated_template AS (UPDATE clinical_templates SET name=COALESCE($2,name),description=COALESCE($3,description) WHERE id=$1 AND archived_at IS NULL RETURNING id)
-		UPDATE clinical_template_versions SET definition=$4,created_by=$5 WHERE template_id IN (SELECT id FROM updated_template) AND status='draft'`, id, q.Name, q.Description, raw, actor)
+		UPDATE clinical_template_versions SET definition=$4,created_by=$5 WHERE template_id IN (SELECT id FROM updated_template) AND status='draft'`, id, q.Name, q.Description, string(raw), actor)
 	if e != nil {
 		return nil, normalizeResourceError(e)
 	}
@@ -280,8 +286,11 @@ func (r *Repository) ListEncounterForms(c context.Context, visitID string) ([]cl
 }
 
 func (r *Repository) SaveEncounterForm(c context.Context, encounterID, actor string, q clinical.SaveEncounterFormRequest) (*clinical.EncounterForm, error) {
-	raw, _ := json.Marshal(q.Answers)
-	tag, e := r.exec(c).Exec(c, "UPDATE clinical_encounter_forms SET answers=$3,revision=revision+1,saved_by=$4 WHERE encounter_id=$1 AND revision=$2 AND status='draft'", encounterID, q.Revision, raw, actor)
+	raw, e := json.Marshal(q.Answers)
+	if e != nil {
+		return nil, e
+	}
+	tag, e := r.exec(c).Exec(c, "UPDATE clinical_encounter_forms SET answers=$3,revision=revision+1,saved_by=$4 WHERE encounter_id=$1 AND revision=$2 AND status='draft'", encounterID, q.Revision, string(raw), actor)
 	if e != nil {
 		return nil, e
 	}

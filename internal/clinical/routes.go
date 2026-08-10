@@ -66,6 +66,8 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.With(middleware.RequirePermission("queues:view")).Get("/clinical/queues/{queueId}/entries", h.ListEntries)
 		r.With(middleware.RequirePermission("queues:operate")).Post("/clinical/queues/{queueId}/entries", h.Enqueue)
 		r.With(middleware.RequirePermission("queues:operate")).Post("/clinical/queue-entries/{entryId}/transition", h.Transition)
+		r.With(middleware.RequirePermission("outpatient:triage")).Post("/clinical/queue-entries/{entryId}/start-triage", h.StartTriage)
+		r.With(middleware.RequirePermission("outpatient:consult")).Post("/clinical/queue-entries/{entryId}/start-consultation", h.StartConsultation)
 		r.With(middleware.RequirePermission("clinical:read")).Get("/clinical/queue-entries/{entryId}/history", h.History)
 		r.With(middleware.RequirePermission("queues:configure")).Get("/clinical/routing-rules", h.ListRules)
 		r.With(middleware.RequirePermission("queues:configure")).Post("/clinical/routing-rules", h.CreateRule)

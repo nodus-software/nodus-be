@@ -212,7 +212,11 @@ func seedAllergens(ctx context.Context, tx interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }) error {
 	for _, x := range clinical.DefaultAllergens {
-		if _, err := tx.Exec(ctx, `INSERT INTO allergen_catalogue(id,code,name,category,aliases) VALUES(gen_random_uuid(),$1,$2,$3,$4)`, x.Code, x.Name, x.Category, x.Aliases); err != nil {
+		aliases := x.Aliases
+		if aliases == nil {
+			aliases = []string{}
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO allergen_catalogue(id,code,name,category,aliases) VALUES(gen_random_uuid(),$1,$2,$3,$4)`, x.Code, x.Name, x.Category, aliases); err != nil {
 			return err
 		}
 	}
@@ -244,7 +248,7 @@ func seedClinicalTemplates(ctx context.Context, tx interface {
 		if _, err = tx.Exec(ctx, `INSERT INTO clinical_templates(id,code,name,description,encounter_type,is_default) VALUES($1,$2,$3,$4,$5,true)`, templateID, x.code, x.name, x.description, x.encounterType); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO clinical_template_versions(id,template_id,version,status,definition,published_at) VALUES($1,$2,1,'published',$3,now())`, versionID, templateID, definition); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO clinical_template_versions(id,template_id,version,status,definition,published_at) VALUES($1,$2,1,'published',$3,now())`, versionID, templateID, string(definition)); err != nil {
 			return err
 		}
 	}

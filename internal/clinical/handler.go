@@ -8,6 +8,7 @@ import (
 	"nodus-health/internal/middleware"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/response"
+	"slices"
 	"strings"
 )
 
@@ -46,7 +47,7 @@ func (h *Handler) fail(w http.ResponseWriter, e error) {
 		response.ErrorWithDetails(w, http.StatusConflict, "ACTIVE_VISIT_CONFLICT", e.Error(), activeVisit)
 	case errors.Is(e, ErrConflict), errors.Is(e, ErrActiveVisit), errors.Is(e, ErrInactiveParent), errors.Is(e, ErrRoutingMissing):
 		response.Conflict(w, e.Error())
-	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired), errors.Is(e, ErrVisitIncomplete), errors.Is(e, ErrFormIncomplete):
+	case errors.Is(e, ErrInvalidInput), errors.Is(e, ErrInvalidTransition), errors.Is(e, ErrReasonRequired), errors.Is(e, ErrVisitIncomplete), errors.Is(e, ErrFormIncomplete), errors.Is(e, ErrEncounterStartRequired):
 		response.Validation(w, map[string]string{"error": e.Error()})
 	default:
 		h.log.Error("clinical request failed", "error", e.Error())
@@ -56,6 +57,27 @@ func (h *Handler) fail(w http.ResponseWriter, e error) {
 func actor(r *http.Request) (string, bool) {
 	a, ok := middleware.AuthFromContext(r.Context())
 	return a.UserID, ok
+}
+func hasPermission(r *http.Request, code string) bool {
+	a, ok := middleware.AuthFromContext(r.Context())
+	return ok && (slices.Contains(a.Permissions, code) || slices.Contains(a.Permissions, "*"))
+}
+
+func (h *Handler) requireEncounterPermission(w http.ResponseWriter, r *http.Request, encounterID string) bool {
+	encounter, err := h.service.GetEncounter(r.Context(), encounterID)
+	if err != nil {
+		h.fail(w, err)
+		return false
+	}
+	permission := "outpatient:consult"
+	if encounter.EncounterType == "triage" {
+		permission = "outpatient:triage"
+	}
+	if !hasPermission(r, permission) {
+		response.Forbidden(w, "you do not have permission to perform this action")
+		return false
+	}
+	return true
 }
 func (h *Handler) ListResources(w http.ResponseWriter, r *http.Request) {
 	x, e := h.service.ListResources(r.Context(), chi.URLParam(r, "kind"))
@@ -211,6 +233,32 @@ func (h *Handler) Transition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, x)
+}
+func (h *Handler) StartTriage(w http.ResponseWriter, r *http.Request) {
+	a, ok := actor(r)
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	x, err := h.service.StartTriage(r.Context(), a, chi.URLParam(r, "entryId"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	response.Created(w, x)
+}
+func (h *Handler) StartConsultation(w http.ResponseWriter, r *http.Request) {
+	a, ok := actor(r)
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	x, err := h.service.StartConsultation(r.Context(), a, chi.URLParam(r, "entryId"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	response.Created(w, x)
 }
 func (h *Handler) History(w http.ResponseWriter, r *http.Request) {
 	x, e := h.service.ListQueueHistory(r.Context(), chi.URLParam(r, "entryId"))

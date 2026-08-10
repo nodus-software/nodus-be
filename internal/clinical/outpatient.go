@@ -48,6 +48,12 @@ func (s *Service) ListEncounters(c context.Context, visitID string) ([]Encounter
 	}
 	return s.repo.ListEncounters(c, visitID)
 }
+func (s *Service) GetEncounter(c context.Context, encounterID string) (*Encounter, error) {
+	if strings.TrimSpace(encounterID) == "" {
+		return nil, ErrInvalidInput
+	}
+	return s.repo.GetEncounter(c, encounterID)
+}
 func (s *Service) ListAllergies(c context.Context, patientID string) ([]Allergy, error) {
 	if patientID == "" {
 		return nil, ErrInvalidInput
@@ -113,6 +119,9 @@ func (s *Service) RecordObservations(c context.Context, actor, encounterID strin
 	if e.Status != "in_progress" {
 		return nil, ErrInvalidTransition
 	}
+	if e.EncounterType != "triage" {
+		return nil, ErrInvalidInput
+	}
 	v, err := s.repo.GetVisit(c, e.VisitID)
 	if err != nil {
 		return nil, err
@@ -153,14 +162,7 @@ func (s *Service) CompleteEncounter(c context.Context, actor, id string, q Compl
 	if form.Status != "submitted" {
 		return nil, ErrFormIncomplete
 	}
-	x, err := s.repo.CompleteEncounter(c, id, actor, nil)
-	if err == nil && e.EncounterType == "triage" {
-		v, vErr := s.repo.GetVisit(c, e.VisitID)
-		if vErr != nil {
-			return nil, vErr
-		}
-		err = s.repo.ApplyEventRouting(c, "encounter.completed", "visit", e.VisitID, v.PatientID, v.VisitType, "triage", &actor)
-	}
+	x, err := s.repo.CompleteEncounter(c, id, actor)
 	if err == nil && s.audit != nil {
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "clinical_encounter_completed", Result: audit.ResultSuccess, TargetResource: id})
 	}

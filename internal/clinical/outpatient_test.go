@@ -67,7 +67,7 @@ func (r *outpatientRepo) GetVisit(context.Context, string) (*Visit, error) {
 func (r *outpatientRepo) GetEncounter(context.Context, string) (*Encounter, error) {
 	return r.encounter, nil
 }
-func (r *outpatientRepo) CompleteEncounter(_ context.Context, id, actor string, _ *string) (*Encounter, error) {
+func (r *outpatientRepo) CompleteEncounter(_ context.Context, id, actor string) (*Encounter, error) {
 	r.encounter.Status = "completed"
 	return r.encounter, nil
 }

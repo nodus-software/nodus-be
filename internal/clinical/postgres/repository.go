@@ -390,11 +390,11 @@ func (r *Repository) ApplyVisitRouting(c context.Context, v clinical.Visit) erro
 	return nil
 }
 
-const entrySelect = "SELECT e.id,e.queue_id,q.name,e.subject_type::text,e.subject_id,e.patient_id,p.full_name,p.mrn,e.status::text,e.priority,e.acuity,e.position_override,e.joined_at,e.updated_at FROM queue_entries e JOIN queues q ON q.id=e.queue_id JOIN patients p ON p.id=e.patient_id"
+const entrySelect = "SELECT e.id,e.queue_id,q.name,sp.kind,e.subject_type::text,e.subject_id,e.patient_id,p.full_name,p.mrn,e.status::text,e.priority,e.acuity,e.position_override,e.joined_at,e.updated_at FROM queue_entries e JOIN queues q ON q.id=e.queue_id JOIN service_points sp ON sp.id=q.service_point_id JOIN patients p ON p.id=e.patient_id"
 
 func scanEntry(row pgx.Row) (*clinical.QueueEntry, error) {
 	var x clinical.QueueEntry
-	e := row.Scan(&x.ID, &x.QueueID, &x.QueueName, &x.SubjectType, &x.SubjectID, &x.PatientID, &x.PatientName, &x.PatientMRN, &x.Status, &x.Priority, &x.Acuity, &x.PositionOverride, &x.JoinedAt, &x.UpdatedAt)
+	e := row.Scan(&x.ID, &x.QueueID, &x.QueueName, &x.ServicePointKind, &x.SubjectType, &x.SubjectID, &x.PatientID, &x.PatientName, &x.PatientMRN, &x.Status, &x.Priority, &x.Acuity, &x.PositionOverride, &x.JoinedAt, &x.UpdatedAt)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil, clinical.ErrNotFound
 	}
@@ -419,6 +419,150 @@ func (r *Repository) ListQueueEntries(c context.Context, q string) ([]clinical.Q
 func (r *Repository) GetQueueEntry(c context.Context, id string) (*clinical.QueueEntry, error) {
 	return scanEntry(r.exec(c).QueryRow(c, entrySelect+" WHERE e.id=$1", id))
 }
+
+// encounterStartSpec describes how one clinical encounter type is taken into
+// service from its queue. Triage and consultation differ only in the service
+// point they are staffed from, the template pinned to the form, and whether an
+// earlier stage of the visit must already be complete.
+type encounterStartSpec struct {
+	servicePointKind        string
+	historyReason           string
+	requiresCompletedTriage bool
+}
+
+var encounterStartSpecs = map[string]encounterStartSpec{
+	"triage":       {servicePointKind: "triage", historyReason: "Triage started"},
+	"consultation": {servicePointKind: "consultation", historyReason: "Consultation started", requiresCompletedTriage: true},
+}
+
+// StartEncounter atomically takes a called patient into service: it creates the
+// encounter, pins the organization's published default template for that
+// encounter type to a fresh form, and moves the queue entry to in_service. The
+// three must happen together — an entry sitting in_service without an encounter
+// leaves the patient with no working page and no way back onto the board.
+//
+// An entry already in_service with no open encounter of this type is recovered
+// rather than rejected, so a patient stranded that way can still be picked up.
+func (r *Repository) StartEncounter(c context.Context, entryID string, encounter clinical.Encounter, formID, actor string) (*clinical.EncounterStart, error) {
+	spec, ok := encounterStartSpecs[encounter.EncounterType]
+	if !ok {
+		return nil, clinical.ErrInvalidInput
+	}
+	exec := r.exec(c)
+	if _, err := exec.Exec(c, "SAVEPOINT outpatient_encounter_start"); err != nil {
+		return nil, err
+	}
+	rollback := func(err error) (*clinical.EncounterStart, error) {
+		_, _ = exec.Exec(c, "ROLLBACK TO SAVEPOINT outpatient_encounter_start")
+		_, _ = exec.Exec(c, "RELEASE SAVEPOINT outpatient_encounter_start")
+		return nil, err
+	}
+
+	var subjectType, visitID, entryStatus, servicePointID, serviceKind, visitType, visitStatus string
+	err := exec.QueryRow(c, `SELECT e.subject_type::text,e.subject_id,e.status::text,q.service_point_id,sp.kind,
+		COALESCE(v.visit_type::text,''),COALESCE(v.status::text,'')
+		FROM queue_entries e
+		JOIN queues q ON q.id=e.queue_id
+		JOIN service_points sp ON sp.id=q.service_point_id
+		LEFT JOIN clinical_visits v ON e.subject_type='visit' AND v.id=e.subject_id
+		WHERE e.id=$1 FOR UPDATE OF e`, entryID).Scan(&subjectType, &visitID, &entryStatus, &servicePointID, &serviceKind, &visitType, &visitStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rollback(clinical.ErrNotFound)
+	}
+	if err != nil {
+		return rollback(err)
+	}
+	if subjectType != "visit" || serviceKind != spec.servicePointKind || visitType != "outpatient" || visitStatus != "active" {
+		return rollback(clinical.ErrInvalidInput)
+	}
+	// in_service is accepted only as a recovery path: it must not already have
+	// an open encounter of this type, which the check below enforces.
+	if entryStatus != "called" && entryStatus != "in_service" {
+		return rollback(clinical.ErrConflict)
+	}
+
+	var openEncounters int
+	err = exec.QueryRow(c, `SELECT count(*) FROM clinical_encounters
+		WHERE visit_id=$1 AND encounter_type=$2::clinical_encounter_type AND status='in_progress'`, visitID, encounter.EncounterType).Scan(&openEncounters)
+	if err != nil {
+		return rollback(err)
+	}
+	if openEncounters > 0 {
+		return rollback(clinical.ErrConflict)
+	}
+
+	if spec.requiresCompletedTriage {
+		var completedTriage int
+		err = exec.QueryRow(c, `SELECT count(*) FROM clinical_encounters
+			WHERE visit_id=$1 AND encounter_type='triage' AND status='completed'`, visitID).Scan(&completedTriage)
+		if err != nil {
+			return rollback(err)
+		}
+		if completedTriage == 0 {
+			return rollback(clinical.ErrInvalidTransition)
+		}
+	}
+
+	var templateVersionID string
+	err = exec.QueryRow(c, `SELECT v.id FROM clinical_templates t
+		JOIN clinical_template_versions v ON v.template_id=t.id AND v.status='published'
+		WHERE t.encounter_type=$1::clinical_encounter_type AND t.is_default AND t.archived_at IS NULL`, encounter.EncounterType).Scan(&templateVersionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rollback(clinical.ErrConflict)
+	}
+	if err != nil {
+		return rollback(err)
+	}
+
+	encounter.VisitID = visitID
+	encounter.ServicePointID = &servicePointID
+	_, err = exec.Exec(c, `INSERT INTO clinical_encounters(id,visit_id,service_point_id,encounter_type,status,clinician_id,started_at)
+		VALUES($1,$2,$3,$4::clinical_encounter_type,'in_progress',$5,$6)`, encounter.ID, visitID, servicePointID, encounter.EncounterType, actor, encounter.StartedAt)
+	if err != nil {
+		return rollback(normalizeResourceError(err))
+	}
+	_, err = exec.Exec(c, `INSERT INTO clinical_encounter_forms(id,encounter_id,template_version_id,saved_by)
+		VALUES($1,$2,$3,$4)`, formID, encounter.ID, templateVersionID, actor)
+	if err != nil {
+		return rollback(normalizeResourceError(err))
+	}
+	tag, err := exec.Exec(c, `UPDATE queue_entries SET status='in_service',service_started_at=COALESCE(service_started_at,now())
+		WHERE id=$1 AND status=$2::queue_entry_status`, entryID, entryStatus)
+	if err != nil {
+		return rollback(err)
+	}
+	if tag.RowsAffected() != 1 {
+		return rollback(clinical.ErrConflict)
+	}
+	if entryStatus == "called" {
+		historyID, herr := utility.GenerateUUID()
+		if herr != nil {
+			return rollback(herr)
+		}
+		_, err = exec.Exec(c, `INSERT INTO queue_entry_history
+			(id,queue_entry_id,from_status,to_status,from_queue_id,to_queue_id,actor_id,reason,automated)
+			SELECT $1,e.id,'called','in_service',e.queue_id,e.queue_id,$2,$3,false FROM queue_entries e WHERE e.id=$4`, historyID, actor, spec.historyReason, entryID)
+		if err != nil {
+			return rollback(err)
+		}
+	}
+	queueEntry, err := r.GetQueueEntry(c, entryID)
+	if err != nil {
+		return rollback(err)
+	}
+	createdEncounter, err := r.GetEncounter(c, encounter.ID)
+	if err != nil {
+		return rollback(err)
+	}
+	form, err := r.GetEncounterForm(c, encounter.ID)
+	if err != nil {
+		return rollback(err)
+	}
+	if _, err = exec.Exec(c, "RELEASE SAVEPOINT outpatient_encounter_start"); err != nil {
+		return nil, err
+	}
+	return &clinical.EncounterStart{QueueEntry: *queueEntry, Encounter: *createdEncounter, Form: *form}, nil
+}
 func (r *Repository) CreateQueueEntry(c context.Context, x clinical.QueueEntry, reason *string, auto bool) (*clinical.QueueEntry, error) {
 	_, e := r.exec(c).Exec(c, "INSERT INTO queue_entries(id,queue_id,subject_type,subject_id,patient_id,status,priority,acuity) VALUES($1,$2,$3,$4,$5,'waiting',$6,$7)", x.ID, x.QueueID, x.SubjectType, x.SubjectID, x.PatientID, x.Priority, x.Acuity)
 	if e != nil {
@@ -439,7 +583,7 @@ func (r *Repository) TransitionQueueEntry(c context.Context, x clinical.QueueEnt
 	if status == "transferred" {
 		persist = "waiting"
 	}
-	tag, e := r.exec(c).Exec(c, "UPDATE queue_entries SET queue_id=$2,status=$3,priority=$4,position_override=$5,called_at=CASE WHEN $3='called' THEN now() ELSE called_at END,service_started_at=CASE WHEN $3='in_service' THEN now() ELSE service_started_at END,completed_at=CASE WHEN $3='completed' THEN now() ELSE completed_at END WHERE id=$1 AND status=$6", x.ID, target, persist, x.Priority, x.PositionOverride, x.Status)
+	tag, e := r.exec(c).Exec(c, "UPDATE queue_entries SET queue_id=$2,status=$3::queue_entry_status,priority=$4,position_override=$5,called_at=CASE WHEN $3::queue_entry_status='called' THEN now() ELSE called_at END,service_started_at=CASE WHEN $3::queue_entry_status='in_service' THEN now() ELSE service_started_at END,completed_at=CASE WHEN $3::queue_entry_status='completed' THEN now() ELSE completed_at END WHERE id=$1 AND status=$6::queue_entry_status", x.ID, target, persist, x.Priority, x.PositionOverride, x.Status)
 	if e != nil {
 		return nil, e
 	}

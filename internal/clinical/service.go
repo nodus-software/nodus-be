@@ -5,6 +5,7 @@ import (
 	"nodus-health/internal/audit"
 	"nodus-health/pkg/utility"
 	"strings"
+	"time"
 )
 
 type AuditRecorder interface {
@@ -180,6 +181,10 @@ func (s *Service) Enqueue(c context.Context, actor, qid string, q EnqueueRequest
 	return x, e
 }
 
+// encounterStartQueueKinds are the service point kinds whose queues take a
+// patient into service through a start endpoint rather than a bare transition.
+var encounterStartQueueKinds = map[string]bool{"triage": true, "consultation": true}
+
 var allowed = map[string]map[string]bool{"waiting": {"called": true, "in_service": true, "paused": true, "transferred": true, "cancelled": true, "no_show": true}, "called": {"waiting": true, "in_service": true, "paused": true, "transferred": true, "cancelled": true, "no_show": true}, "in_service": {"waiting": true, "paused": true, "transferred": true, "completed": true, "cancelled": true}, "paused": {"waiting": true, "called": true, "in_service": true, "transferred": true, "cancelled": true}}
 
 func (s *Service) Transition(c context.Context, actor, id string, q TransitionRequest) (*QueueEntry, error) {
@@ -189,6 +194,12 @@ func (s *Service) Transition(c context.Context, actor, id string, q TransitionRe
 	}
 	if !allowed[x.Status][q.Status] {
 		return nil, ErrInvalidTransition
+	}
+	// Triage and consultation are staffed off an encounter and its pinned form.
+	// Flipping the entry to in_service here would take the patient off the board
+	// without creating either, so those queues must use their start endpoint.
+	if q.Status == "in_service" && encounterStartQueueKinds[x.ServicePointKind] {
+		return nil, ErrEncounterStartRequired
 	}
 	target := x.QueueID
 	if q.QueueID != nil && *q.QueueID != "" {
@@ -216,6 +227,43 @@ func (s *Service) Transition(c context.Context, actor, id string, q TransitionRe
 		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "queue_entry_transitioned", Result: audit.ResultSuccess, TargetResource: id, Metadata: map[string]any{"from": x.Status, "to": q.Status, "reason": q.Reason}})
 	}
 	return y, e
+}
+
+func (s *Service) StartTriage(c context.Context, actor, entryID string) (*EncounterStart, error) {
+	return s.startEncounter(c, actor, entryID, "triage")
+}
+
+func (s *Service) StartConsultation(c context.Context, actor, entryID string) (*EncounterStart, error) {
+	return s.startEncounter(c, actor, entryID, "consultation")
+}
+
+// startEncounter takes a called patient into service. The encounter, its form
+// and the queue transition are created together by the repository so a clinician
+// never ends up with an entry in service and no page to work on.
+func (s *Service) startEncounter(c context.Context, actor, entryID, encounterType string) (*EncounterStart, error) {
+	if strings.TrimSpace(entryID) == "" {
+		return nil, ErrInvalidInput
+	}
+	encounterID, err := utility.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+	formID, err := utility.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	x, err := s.repo.StartEncounter(c, entryID, Encounter{
+		ID:            encounterID,
+		EncounterType: encounterType,
+		Status:        "in_progress",
+		ClinicianID:   &actor,
+		StartedAt:     &now,
+	}, formID, actor)
+	if err == nil && s.audit != nil {
+		_ = s.audit.Record(c, audit.Entry{UserID: &actor, Action: "outpatient_" + encounterType + "_started", Result: audit.ResultSuccess, TargetResource: encounterID, Metadata: map[string]any{"queue_entry_id": entryID, "visit_id": x.Encounter.VisitID}})
+	}
+	return x, err
 }
 func (s *Service) ListQueueEntries(c context.Context, q string) ([]QueueEntry, error) {
 	return s.repo.ListQueueEntries(c, q)

@@ -15,6 +15,11 @@ var (
 	ErrOperationalUse    = errors.New("configuration is currently in operational use")
 	ErrInactiveParent    = errors.New("the parent configuration must be active first")
 	ErrRoutingMissing    = errors.New("no active routing rule matches this workflow event")
+	// ErrEncounterStartRequired guards the generic queue transition against
+	// putting a clinical queue entry into service without the encounter and
+	// form that the clinician's working page is built from. Taking a patient
+	// into triage or consultation must go through the matching start endpoint.
+	ErrEncounterStartRequired = errors.New("take the patient into service through the encounter start endpoint for this queue")
 )
 
 type LifecycleConflictError struct {

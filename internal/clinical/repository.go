@@ -46,6 +46,7 @@ type Repository interface {
 	ApplyVisitRouting(context.Context, Visit) error
 	ListQueueEntries(context.Context, string) ([]QueueEntry, error)
 	GetQueueEntry(context.Context, string) (*QueueEntry, error)
+	StartEncounter(context.Context, string, Encounter, string, string) (*EncounterStart, error)
 	CreateQueueEntry(context.Context, QueueEntry, *string, bool) (*QueueEntry, error)
 	TransitionQueueEntry(context.Context, QueueEntry, string, string, *string, *string, bool) (*QueueEntry, error)
 	ListQueueHistory(context.Context, string) ([]QueueHistory, error)
@@ -68,7 +69,7 @@ type Repository interface {
 	CreateEncounterWithForm(context.Context, Encounter, string, string) (*Encounter, error)
 	GetEncounter(context.Context, string) (*Encounter, error)
 	ListEncounters(context.Context, string) ([]Encounter, error)
-	CompleteEncounter(context.Context, string, string, *string) (*Encounter, error)
+	CompleteEncounter(context.Context, string, string) (*Encounter, error)
 	CreateObservations(context.Context, []Observation) ([]Observation, error)
 	ListObservations(context.Context, string) ([]Observation, error)
 	CreateNote(context.Context, ClinicalNote) (*ClinicalNote, error)

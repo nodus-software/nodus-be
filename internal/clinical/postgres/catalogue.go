@@ -402,7 +402,7 @@ func (r *Repository) ResolveCatalogueReferenceCodes(c context.Context, kind stri
 }
 
 func (r *Repository) SaveCatalogueImport(c context.Context, x clinical.CatalogueImport, actor string) error {
-	_, e := r.exec(c).Exec(c, `INSERT INTO catalogue_imports(id,catalogue,mode,file_name,file_checksum,rows,summary,created_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, x.ID, x.Catalogue, x.Mode, "catalogue.csv", x.FileChecksum, x.Rows, x.Summary, actor, x.ExpiresAt)
+	_, e := r.exec(c).Exec(c, `INSERT INTO catalogue_imports(id,catalogue,mode,file_name,file_checksum,rows,summary,created_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, x.ID, x.Catalogue, x.Mode, "catalogue.csv", x.FileChecksum, string(x.Rows), string(x.Summary), actor, x.ExpiresAt)
 	return e
 }
 func (r *Repository) GetCatalogueImport(c context.Context, id string) (*clinical.CatalogueImport, error) {

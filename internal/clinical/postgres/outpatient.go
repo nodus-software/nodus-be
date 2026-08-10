@@ -157,66 +157,116 @@ func (r *Repository) ListEncounters(c context.Context, visit string) ([]clinical
 	}
 	return out, rows.Err()
 }
-func (r *Repository) CompleteEncounter(c context.Context, id, actor string, targetQueue *string) (*clinical.Encounter, error) {
-	e, err := r.GetEncounter(c, id)
-	if err != nil {
+func (r *Repository) CompleteEncounter(c context.Context, id, actor string) (*clinical.Encounter, error) {
+	exec := r.exec(c)
+	if _, err := exec.Exec(c, "SAVEPOINT clinical_encounter_complete"); err != nil {
 		return nil, err
 	}
-	tag, err := r.exec(c).Exec(c, "UPDATE clinical_encounters SET status='completed',ended_at=now() WHERE id=$1 AND status='in_progress'", id)
-	if err != nil {
+	rollback := func(err error) (*clinical.Encounter, error) {
+		_, _ = exec.Exec(c, "ROLLBACK TO SAVEPOINT clinical_encounter_complete")
+		_, _ = exec.Exec(c, "RELEASE SAVEPOINT clinical_encounter_complete")
 		return nil, err
+	}
+
+	e, err := scanEncounter(exec.QueryRow(c, "SELECT "+encounterCols+" FROM clinical_encounters WHERE id=$1 FOR UPDATE", id))
+	if err != nil {
+		return rollback(err)
+	}
+	if e.Status != "in_progress" {
+		return rollback(clinical.ErrConflict)
+	}
+
+	var patientID, targetQueueID string
+	var priority int16
+	if e.EncounterType == "triage" {
+		err = exec.QueryRow(c, `SELECT v.patient_id,r.target_queue_id,r.priority
+			FROM clinical_visits v
+			JOIN LATERAL (
+				SELECT target_queue_id,priority FROM queue_routing_rules
+				WHERE active AND event_type='encounter.completed'
+				  AND (visit_type IS NULL OR visit_type=v.visit_type)
+				  AND (encounter_type IS NULL OR encounter_type='triage')
+				  AND order_kind IS NULL AND service_category IS NULL
+				ORDER BY ((visit_type IS NOT NULL)::int + (encounter_type IS NOT NULL)::int) DESC,priority DESC,id
+				LIMIT 1
+			) r ON true WHERE v.id=$1`, e.VisitID).Scan(&patientID, &targetQueueID, &priority)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return rollback(clinical.ErrRoutingMissing)
+		}
+		if err != nil {
+			return rollback(err)
+		}
+	}
+
+	tag, err := exec.Exec(c, "UPDATE clinical_encounters SET status='completed',ended_at=now() WHERE id=$1 AND status='in_progress'", id)
+	if err != nil {
+		return rollback(err)
 	}
 	if tag.RowsAffected() != 1 {
-		return nil, clinical.ErrConflict
+		return rollback(clinical.ErrConflict)
 	}
-	if e.EncounterType == "triage" && targetQueue != nil {
-		var patient string
-		if err = r.exec(c).QueryRow(c, "SELECT patient_id FROM clinical_visits WHERE id=$1", e.VisitID).Scan(&patient); err != nil {
-			return nil, err
+
+	if e.EncounterType == "triage" {
+		rows, queryErr := exec.Query(c, `SELECT id,queue_id,status::text FROM queue_entries
+			WHERE subject_type='visit' AND subject_id=$1 AND status IN ('waiting','called','in_service','paused') FOR UPDATE`, e.VisitID)
+		if queryErr != nil {
+			return rollback(queryErr)
 		}
-		rows, err := r.exec(c).Query(c, "SELECT id,queue_id,status::text FROM queue_entries WHERE subject_type='visit' AND subject_id=$1 AND status IN ('waiting','called','in_service','paused') FOR UPDATE", e.VisitID)
-		if err != nil {
-			return nil, err
-		}
-		type old struct{ id, queue, status string }
-		var olds []old
+		type activeEntry struct{ id, queue, status string }
+		var active []activeEntry
 		for rows.Next() {
-			var x old
-			if err = rows.Scan(&x.id, &x.queue, &x.status); err != nil {
+			var item activeEntry
+			if err = rows.Scan(&item.id, &item.queue, &item.status); err != nil {
 				rows.Close()
-				return nil, err
+				return rollback(err)
 			}
-			olds = append(olds, x)
+			active = append(active, item)
 		}
 		rows.Close()
 		if err = rows.Err(); err != nil {
-			return nil, err
+			return rollback(err)
 		}
-		for _, x := range olds {
-			_, err = r.exec(c).Exec(c, "UPDATE queue_entries SET status='completed',completed_at=now() WHERE id=$1", x.id)
-			if err != nil {
-				return nil, err
+		for _, item := range active {
+			if _, err = exec.Exec(c, "UPDATE queue_entries SET status='completed',completed_at=now() WHERE id=$1", item.id); err != nil {
+				return rollback(err)
 			}
-			h, _ := utility.GenerateUUID()
-			_, err = r.exec(c).Exec(c, "INSERT INTO queue_entry_history(id,queue_entry_id,from_status,to_status,from_queue_id,to_queue_id,actor_id,reason) VALUES($1,$2,$3,'completed',$4,$4,$5,'Triage completed')", h, x.id, x.status, x.queue, actor)
-			if err != nil {
-				return nil, err
+			historyID, generateErr := utility.GenerateUUID()
+			if generateErr != nil {
+				return rollback(generateErr)
+			}
+			if _, err = exec.Exec(c, `INSERT INTO queue_entry_history
+				(id,queue_entry_id,from_status,to_status,from_queue_id,to_queue_id,actor_id,reason,automated)
+				VALUES($1,$2,$3,'completed',$4,$4,$5,'Triage completed',true)`, historyID, item.id, item.status, item.queue, actor); err != nil {
+				return rollback(err)
 			}
 		}
-		qid, _ := utility.GenerateUUID()
-		h, _ := utility.GenerateUUID()
-		tag, err = r.exec(c).Exec(c, "INSERT INTO queue_entries(id,queue_id,subject_type,subject_id,patient_id,status,priority) VALUES($1,$2,'visit',$3,$4,'waiting',0) ON CONFLICT DO NOTHING", qid, *targetQueue, e.VisitID, patient)
-		if err != nil {
-			return nil, err
+
+		entryID, generateErr := utility.GenerateUUID()
+		if generateErr != nil {
+			return rollback(generateErr)
 		}
-		if tag.RowsAffected() == 1 {
-			_, err = r.exec(c).Exec(c, "INSERT INTO queue_entry_history(id,queue_entry_id,to_status,to_queue_id,actor_id,reason,automated) VALUES($1,$2,'waiting',$3,$4,'Triage completed',true)", h, qid, *targetQueue, actor)
-			if err != nil {
-				return nil, err
-			}
+		historyID, generateErr := utility.GenerateUUID()
+		if generateErr != nil {
+			return rollback(generateErr)
+		}
+		if _, err = exec.Exec(c, `INSERT INTO queue_entries(id,queue_id,subject_type,subject_id,patient_id,status,priority)
+			VALUES($1,$2,'visit',$3,$4,'waiting',$5)`, entryID, targetQueueID, e.VisitID, patientID, priority); err != nil {
+			return rollback(normalizeResourceError(err))
+		}
+		if _, err = exec.Exec(c, `INSERT INTO queue_entry_history
+			(id,queue_entry_id,to_status,to_queue_id,actor_id,reason,automated)
+			VALUES($1,$2,'waiting',$3,$4,'Automatic encounter.completed routing',true)`, historyID, entryID, targetQueueID, actor); err != nil {
+			return rollback(err)
 		}
 	}
-	return r.GetEncounter(c, id)
+	completed, err := r.GetEncounter(c, id)
+	if err != nil {
+		return rollback(err)
+	}
+	if _, err = exec.Exec(c, "RELEASE SAVEPOINT clinical_encounter_complete"); err != nil {
+		return nil, err
+	}
+	return completed, nil
 }
 
 const observationCols = "id,patient_id,visit_id,encounter_id,code,value_numeric,value_text,unit,observed_at,recorded_by,created_at,source_form_id,source_form_field_key"

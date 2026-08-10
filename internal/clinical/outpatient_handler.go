@@ -71,6 +71,16 @@ func (h *Handler) CreateEncounter(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if q.EncounterType == "triage" || q.EncounterType == "consultation" {
+		permission := "outpatient:consult"
+		if q.EncounterType == "triage" {
+			permission = "outpatient:triage"
+		}
+		if !hasPermission(r, permission) {
+			response.Forbidden(w, "you do not have permission to perform this action")
+			return
+		}
+	}
 	h.withActor(w, r, func(a string) error {
 		x, e := h.service.CreateEncounter(r.Context(), a, chi.URLParam(r, "visitId"), q)
 		if e == nil {
@@ -115,6 +125,9 @@ func (h *Handler) RecordObservations(w http.ResponseWriter, r *http.Request) {
 	})
 }
 func (h *Handler) CompleteEncounter(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEncounterPermission(w, r, chi.URLParam(r, "encounterId")) {
+		return
+	}
 	q, ok := bind[CompleteEncounterRequest](w, r)
 	if !ok {
 		return

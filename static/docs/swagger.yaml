@@ -1617,9 +1617,14 @@ paths:
       tags: [Clinical]
       security: [{ bearerAuth: [] }]
       summary: Complete a submitted encounter; triage completion atomically routes to consultation
+      description: >
+        Triage encounters require outpatient:triage. Completion atomically completes the
+        active triage queue entry and creates a waiting consultation entry using the
+        organization's configured encounter.completed routing rule; clients do not supply
+        a destination queue. Consultation encounters require outpatient:consult.
       parameters: [{ name: encounterId, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CompleteEncounter' } } } }
-      responses: { '200': { description: Completed encounter }, '409': { $ref: '#/components/responses/Conflict' } }
+      responses: { '200': { description: Completed encounter }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } }
   /clinical/visits/{visitId}/notes:
     post:
       tags: [Clinical]
@@ -1683,12 +1688,56 @@ paths:
       tags: [Clinical]
       security: [{ bearerAuth: [] }]
       summary: Move or change the state of a queue entry
+      description: >
+        Requires queues:operate. Entries on a queue whose service point kind is triage or
+        consultation cannot be moved to in_service here: taking those patients into service
+        must create the encounter and its pinned form, so use the matching start endpoint
+        instead. Every other transition, including calling the patient, is unaffected.
       parameters: [{ name: entryId, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransitionQueueEntry' } } } }
       responses:
         '200': { description: Updated queue entry, content: { application/json: { schema: { $ref: '#/components/schemas/QueueEntryResponse' } } } }
         '409': { $ref: '#/components/responses/Conflict' }
+        '422': { description: Validation failed, or in_service was requested on a triage or consultation queue, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /clinical/queue-entries/{entryId}/start-triage:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Start triage for a called outpatient queue entry
+      description: >
+        Requires outpatient:triage. Atomically changes the queue entry from called to
+        in_service, starts a triage encounter at the queue's service point, and pins the
+        organization's current published default triage template. Calling the patient
+        remains a separate queue transition requiring queues:operate.
+      parameters: [{ name: entryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '201': { description: Started triage encounter and form, content: { application/json: { schema: { $ref: '#/components/schemas/EncounterStartResponse' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/queue-entries/{entryId}/start-consultation:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Start consultation for a called outpatient queue entry
+      description: >
+        Requires outpatient:consult. The consultation counterpart of start-triage: it
+        atomically changes the queue entry from called to in_service, starts a consultation
+        encounter at the queue's service point, and pins the organization's current published
+        default consultation template, so the clinician's page can be rendered from the
+        response alone. Calling the patient remains a separate queue transition requiring
+        queues:operate. The visit must already have a completed triage encounter — start an
+        unusual consultation through POST /clinical/visits/{visitId}/encounters/override
+        instead. An entry left in_service without an encounter is picked up rather than
+        refused, so a stranded patient can be recovered.
+      parameters: [{ name: entryId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '201': { description: Started consultation encounter and form, content: { application/json: { schema: { $ref: '#/components/schemas/EncounterStartResponse' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: A consultation is already open for this visit, or the organization has no published default consultation template, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: The entry is not on a consultation queue, or the visit has no completed triage, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
   /clinical/queue-entries/{entryId}/history:
     get:
       tags: [Clinical]
@@ -2183,7 +2232,8 @@ components:
       properties: { observations: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ObservationInput' } } }
     CompleteEncounter:
       type: object
-      properties: { consultation_queue_id: { type: string, format: uuid, description: Required when completing triage } }
+      properties:
+        expected_updated_at: { type: string, format: date-time, description: Optional optimistic concurrency value }
     CreateNote:
       type: object
       required: [note_type, body]
@@ -2211,6 +2261,12 @@ components:
         id: { type: string, format: uuid }
         queue_id: { type: string, format: uuid }
         queue_name: { type: string }
+        service_point_kind:
+          description: >
+            Kind of the service point the queue is staffed from. triage and consultation
+            entries are taken into service through their start endpoint rather than a
+            transition, so clients use this to choose the action to offer.
+          type: string
         subject_type: { type: string, enum: [visit, admission, order] }
         subject_id: { type: string, format: uuid }
         patient_id: { type: string, format: uuid }
@@ -2220,6 +2276,26 @@ components:
         priority: { type: integer, minimum: 0, maximum: 100 }
         acuity: { type: integer, nullable: true, minimum: 1, maximum: 5 }
         joined_at: { type: string, format: date-time }
+    Encounter:
+      type: object
+      required: [id, visit_id, encounter_type, status]
+      properties:
+        id: { type: string, format: uuid }
+        visit_id: { type: string, format: uuid }
+        encounter_type: { type: string, enum: [triage, consultation] }
+        status: { type: string, enum: [planned, in_progress, completed, cancelled] }
+        service_point_id: { type: string, format: uuid, nullable: true }
+        clinician_id: { type: string, format: uuid, nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        ended_at: { type: string, format: date-time, nullable: true }
+    EncounterStart:
+      description: Everything a client needs to render a clinician's working page after taking a patient into service.
+      type: object
+      required: [queue_entry, encounter, form]
+      properties:
+        queue_entry: { $ref: '#/components/schemas/QueueEntry' }
+        encounter: { $ref: '#/components/schemas/Encounter' }
+        form: { $ref: '#/components/schemas/EncounterForm' }
     Enqueue:
       type: object
       required: [subject_type, subject_id, patient_id, priority]
@@ -2254,6 +2330,11 @@ components:
     VisitResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
     QueueEntryResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
     QueueEntryListResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
+    EncounterStartResponse:
+      allOf:
+        - { $ref: '#/components/schemas/SuccessResponse' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/EncounterStart' } }
 
     APIError:
       type: object

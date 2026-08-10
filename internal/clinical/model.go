@@ -32,6 +32,7 @@ type QueueEntry struct {
 	ID               string    `json:"id"`
 	QueueID          string    `json:"queue_id"`
 	QueueName        string    `json:"queue_name"`
+	ServicePointKind string    `json:"service_point_kind"`
 	SubjectType      string    `json:"subject_type"`
 	SubjectID        string    `json:"subject_id"`
 	PatientID        string    `json:"patient_id"`
@@ -55,6 +56,20 @@ type QueueHistory struct {
 	Automated   bool      `json:"automated"`
 	OccurredAt  time.Time `json:"occurred_at"`
 }
+
+// EncounterStart is the complete state a client needs after taking a called
+// patient into a clinical encounter. The form contains the immutable template
+// version pinned to the newly-created encounter, so the client can render the
+// working page without a second round trip.
+type EncounterStart struct {
+	QueueEntry QueueEntry    `json:"queue_entry"`
+	Encounter  Encounter     `json:"encounter"`
+	Form       EncounterForm `json:"form"`
+}
+
+// TriageStart is the original name of EncounterStart, kept for callers written
+// before consultation reused the same flow.
+type TriageStart = EncounterStart
 type RoutingRule struct {
 	ID              string  `json:"id"`
 	Name            string  `json:"name"`
