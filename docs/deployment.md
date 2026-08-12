@@ -63,6 +63,7 @@ SMTP_HOST=smtp.example.com
 SMTP_PORT=587
 SMTP_SENDER=no-reply@example.com
 SMTP_PASSWORD=replace-me
+EMAIL_LOGO_URL=https://res.cloudinary.com/dwjwrng2b/image/upload/v1786552657/full_logo_no_bg_eqgkg0.png
 ```
 
 Include any other settings from `config/config.go` that differ from their safe

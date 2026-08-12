@@ -59,7 +59,7 @@ func main() {
 		Host: cfg.SmtpHost, Port: cfg.SmtpPort, Sender: cfg.SmtpSender, Password: cfg.SmtpPassword,
 	}
 	emailRenderer := email.NewRenderer(email.CommonData{
-		AppName: "Nodus Health", AppURL: cfg.BaseUrl,
+		AppName: "Nodus Health", AppURL: cfg.BaseUrl, LogoURL: cfg.EmailLogoURL,
 	})
 
 	authCfg := auth.Config{

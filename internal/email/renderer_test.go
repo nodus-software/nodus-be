@@ -64,3 +64,23 @@ func TestRendererRendersActiveTemplates(t *testing.T) {
 		})
 	}
 }
+
+func TestRendererWithoutLogoURLUsesTextHeader(t *testing.T) {
+	r := NewRenderer(CommonData{AppName: "Nodus Health", AppURL: "https://app.example.test"})
+	got, err := r.RenderPasswordReset(PasswordResetData{
+		ResetURL:  "https://app.example.test/reset?t=secret",
+		ExpiresAt: time.Date(2026, time.July, 28, 14, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.HTML, "<img") {
+		t.Error("HTML contains an image when no logo URL is configured")
+	}
+	if strings.Contains(got.HTML, "data:image") {
+		t.Error("HTML contains an embedded data URI")
+	}
+	if !strings.Contains(got.HTML, ">Nodus Health</a>") {
+		t.Error("HTML does not contain the application-name fallback")
+	}
+}

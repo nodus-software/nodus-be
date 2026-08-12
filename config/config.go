@@ -98,6 +98,7 @@ type Config struct {
 	SmtpPort     string
 	SmtpSender   string
 	SmtpPassword string
+	EmailLogoURL string
 }
 
 // Load reads from a .env file if present, then falls back to system env vars.
@@ -190,6 +191,7 @@ func Load() (*Config, error) {
 		SmtpPort:     getEnv("SMTP_PORT", ""),
 		SmtpSender:   getEnv("SMTP_SENDER", ""),
 		SmtpPassword: getEnv("SMTP_PASSWORD", ""),
+		EmailLogoURL: getEnv("EMAIL_LOGO_URL", ""),
 	}
 
 	if cfg.SessionRefreshTokenTTL <= 0 || cfg.RefreshTokenTTL <= 0 || cfg.SessionRefreshTokenTTL > cfg.RefreshTokenTTL {

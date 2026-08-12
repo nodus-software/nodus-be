@@ -38,6 +38,7 @@ func main() {
 	renderer := email.NewRenderer(email.CommonData{
 		AppName:      "Nodus Health",
 		AppURL:       "https://nodus.example.test",
+		LogoURL:      "https://res.cloudinary.com/dwjwrng2b/image/upload/v1786552657/full_logo_no_bg_eqgkg0.png",
 		SupportEmail: "support@nodushealth.example",
 		SupportURL:   "https://nodus.example.test/support",
 		PrivacyURL:   "https://nodus.example.test/privacy",
