@@ -43,8 +43,12 @@ It must contain the complete application production configuration, including:
 
 ```dotenv
 APP_ENV=production
-BASE_URL=https://api.example.com
-ALLOWED_ORIGINS=https://app.example.com
+BASE_URL=https://example.com
+ALLOWED_ORIGINS=https://example.com
+TENANT_BASE_DOMAIN=example.com
+TENANT_URL_SCHEME=https
+TENANT_URL_PORT=
+RESERVED_ORGANIZATION_SLUGS=
 
 DB_URL=postgres://app_user:encoded-password@db.example.com:5432/nodus?sslmode=verify-full
 DB_NAME=nodus
@@ -56,8 +60,8 @@ MIGRATION_DB_URL=postgres://migration_user:encoded-password@db.example.com:5432/
 JWT_SECRET=replace-with-a-long-random-secret
 MFA_ENCRYPTION_KEY=replace-with-a-base64-encoded-32-byte-key
 REFRESH_COOKIE_SECURE=true
-WEBAUTHN_RP_ID=app.example.com
-WEBAUTHN_ORIGINS=https://app.example.com
+WEBAUTHN_RP_ID=example.com
+WEBAUTHN_ORIGINS=https://example.com
 
 SMTP_HOST=smtp.example.com
 SMTP_PORT=587

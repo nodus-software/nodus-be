@@ -34,3 +34,19 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 
 	return pool, nil
 }
+
+// ValidateTenantRuntimeRole prevents deployments from silently disabling every
+// tenant RLS policy by connecting the API as a PostgreSQL superuser or a role
+// with BYPASSRLS. Explicit tenant predicates remain required in repositories;
+// this is the independent database-level backstop.
+func ValidateTenantRuntimeRole(ctx context.Context, pool *pgxpool.Pool) error {
+	var role string
+	var superuser, bypassRLS bool
+	if err := pool.QueryRow(ctx, `SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user`).Scan(&role, &superuser, &bypassRLS); err != nil {
+		return fmt.Errorf("inspect database runtime role: %w", err)
+	}
+	if superuser || bypassRLS {
+		return fmt.Errorf("database runtime role %q must be NOSUPERUSER and NOBYPASSRLS", role)
+	}
+	return nil
+}

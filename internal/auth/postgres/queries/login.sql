@@ -25,7 +25,7 @@ WHERE id = $1;
 
 -- name: ResetFailedLoginAttempts :exec
 UPDATE users
-SET failed_login_attempts = 0
+SET failed_login_attempts = 0, locked_until = NULL
 WHERE id = $1;
 
 -- name: CreateLoginChallenge :exec

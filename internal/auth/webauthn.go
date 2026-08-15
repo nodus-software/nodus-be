@@ -10,9 +10,44 @@ import (
 	wa "github.com/go-webauthn/webauthn/webauthn"
 
 	"nodus-health/internal/audit"
+	"nodus-health/internal/tenant"
 	"nodus-health/pkg/security"
 	"nodus-health/pkg/utility"
 )
+
+func (s *Service) webAuthnForContext(ctx context.Context) (*wa.WebAuthn, error) {
+	identity, ok := tenant.FromContext(ctx)
+	if !ok || s.cfg.TenantBaseDomain == "" || s.cfg.TenantURLScheme == "" {
+		if s.webauthnErr != nil || s.webauthn == nil {
+			return nil, ErrWebAuthnUnavailable
+		}
+		return s.webauthn, nil
+	}
+	origin := s.cfg.TenantURLScheme + "://" + identity.Slug + "." + s.cfg.TenantBaseDomain
+	rpID := tenantWebAuthnRPID(s.cfg.WebAuthnRPID, s.cfg.TenantBaseDomain, identity.Slug)
+	// Browsers special-case localhost as a secure development origin, but do
+	// not consistently accept bare "localhost" as the parent RP ID of a
+	// tenant subdomain. Bind development credentials to the exact tenant host.
+	if s.cfg.TenantURLPort != "" {
+		origin += ":" + s.cfg.TenantURLPort
+	}
+	configured, err := wa.New(&wa.Config{
+		RPDisplayName: s.cfg.WebAuthnRPDisplayName, RPID: rpID, RPOrigins: []string{origin},
+		AttestationPreference:  protocol.PreferNoAttestation,
+		AuthenticatorSelection: protocol.AuthenticatorSelection{ResidentKey: protocol.ResidentKeyRequirementPreferred, UserVerification: protocol.VerificationRequired},
+	})
+	if err != nil {
+		return nil, ErrWebAuthnUnavailable
+	}
+	return configured, nil
+}
+
+func tenantWebAuthnRPID(configured, baseDomain, slug string) string {
+	if baseDomain == "localhost" && configured == "localhost" {
+		return slug + ".localhost"
+	}
+	return configured
+}
 
 type webAuthnUser struct {
 	user        *User
@@ -64,8 +99,9 @@ func (s *Service) generateRecoveryCodes(ctx context.Context, repo Repository, us
 }
 
 func (s *Service) BeginWebAuthnRegistration(ctx context.Context, userID, enrollmentTokenID string, req WebAuthnRegistrationOptionsRequest) (*WebAuthnRegistrationOptionsResponse, error) {
-	if s.webauthnErr != nil || s.webauthn == nil {
-		return nil, ErrWebAuthnUnavailable
+	webauthn, err := s.webAuthnForContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 	req.Label = strings.TrimSpace(req.Label)
 	if req.Label == "" || len(req.Label) > 80 {
@@ -78,7 +114,7 @@ func (s *Service) BeginWebAuthnRegistration(ctx context.Context, userID, enrollm
 	if enrollmentTokenID == "" && !security.ComparePassword(u.user.PasswordHash, req.CurrentPassword) {
 		return nil, ErrCurrentPasswordInvalid
 	}
-	creation, session, err := s.webauthn.BeginRegistration(u)
+	creation, session, err := webauthn.BeginRegistration(u)
 	if err != nil {
 		return nil, ErrWebAuthnInvalid
 	}
@@ -102,6 +138,10 @@ func (s *Service) BeginWebAuthnRegistration(ctx context.Context, userID, enrollm
 }
 
 func (s *Service) FinishWebAuthnRegistration(ctx context.Context, userID, enrollmentTokenID string, req WebAuthnRegistrationVerifyRequest) (*WebAuthnRegistrationVerifyResponse, error) {
+	webauthn, err := s.webAuthnForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	ceremony, err := s.repo.GetWebAuthnCeremonyByID(ctx, req.CeremonyID)
 	if err != nil {
 		return nil, ErrWebAuthnInvalid
@@ -127,7 +167,7 @@ func (s *Service) FinishWebAuthnRegistration(ctx context.Context, userID, enroll
 	if err != nil {
 		return nil, ErrWebAuthnInvalid
 	}
-	credential, err := s.webauthn.CreateCredential(u, session, parsed)
+	credential, err := webauthn.CreateCredential(u, session, parsed)
 	if err != nil {
 		return nil, ErrWebAuthnInvalid
 	}
@@ -184,6 +224,10 @@ func (s *Service) FinishWebAuthnRegistration(ctx context.Context, userID, enroll
 }
 
 func (s *Service) BeginWebAuthnLogin(ctx context.Context, req WebAuthnLoginOptionsRequest) (*WebAuthnLoginOptionsResponse, error) {
+	webauthn, err := s.webAuthnForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	challenge, err := s.repo.GetLoginChallengeByHash(ctx, security.HashToken(req.ChallengeToken))
 	if err != nil {
 		return nil, ErrChallengeInvalid
@@ -202,7 +246,7 @@ func (s *Service) BeginWebAuthnLogin(ctx context.Context, req WebAuthnLoginOptio
 	if len(u.credentials) == 0 {
 		return nil, ErrWebAuthnUnavailable
 	}
-	assertion, session, err := s.webauthn.BeginLogin(u)
+	assertion, session, err := webauthn.BeginLogin(u)
 	if err != nil {
 		return nil, ErrWebAuthnInvalid
 	}
@@ -226,6 +270,10 @@ func (s *Service) BeginWebAuthnLogin(ctx context.Context, req WebAuthnLoginOptio
 }
 
 func (s *Service) FinishWebAuthnLogin(ctx context.Context, req WebAuthnLoginVerifyRequest, ip, userAgent, deviceLabel string) (*TokenPairResponse, error) {
+	webauthn, err := s.webAuthnForContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	challenge, err := s.repo.GetLoginChallengeByHash(ctx, security.HashToken(req.ChallengeToken))
 	if err != nil {
 		return nil, ErrChallengeInvalid
@@ -256,7 +304,7 @@ func (s *Service) FinishWebAuthnLogin(ctx context.Context, req WebAuthnLoginVeri
 	if err != nil {
 		return nil, ErrWebAuthnInvalid
 	}
-	credential, err := s.webauthn.ValidateLogin(u, session, parsed)
+	credential, err := webauthn.ValidateLogin(u, session, parsed)
 	if err != nil {
 		return nil, ErrWebAuthnInvalid
 	}

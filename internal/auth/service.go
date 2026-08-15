@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -41,7 +43,10 @@ type PasswordPolicy struct {
 // package) so the domain stays decoupled from how the app is wired together;
 // cmd/api/main.go maps config.Config into this shape.
 type Config struct {
-	BaseURL string
+	BaseURL          string
+	TenantBaseDomain string
+	TenantURLScheme  string
+	TenantURLPort    string
 
 	JWTSecret              string
 	AccessTokenTTL         time.Duration
@@ -67,6 +72,18 @@ type Config struct {
 	PasswordResetMaxPerIPPerHour       int
 
 	PasswordPolicy PasswordPolicy
+}
+
+func (s *Service) tenantFrontendURL(ctx context.Context, path string) string {
+	identity, ok := tenant.FromContext(ctx)
+	if ok && s.cfg.TenantBaseDomain != "" && s.cfg.TenantURLScheme != "" {
+		port := ""
+		if s.cfg.TenantURLPort != "" {
+			port = ":" + s.cfg.TenantURLPort
+		}
+		return fmt.Sprintf("%s://%s.%s%s%s", s.cfg.TenantURLScheme, identity.Slug, s.cfg.TenantBaseDomain, port, path)
+	}
+	return strings.TrimRight(s.cfg.BaseURL, "/") + path
 }
 
 type Service struct {
@@ -134,6 +151,16 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip string) (*Logi
 	if user.IsLocked(now) {
 		s.recordLoginFailure(ctx, &user.ID, ip, "account_locked")
 		return nil, &LockedError{LockedUntil: *user.LockedUntil}
+	}
+	// A timed lockout starts a fresh attempt window once it expires. Leaving the
+	// counter at the threshold would make the next single typo immediately lock
+	// the account again, which is especially harmful for a sole administrator.
+	if user.LockedUntil != nil {
+		if err := s.repo.ResetFailedLoginAttempts(ctx, user.ID); err != nil {
+			return nil, err
+		}
+		user.FailedLoginAttempts = 0
+		user.LockedUntil = nil
 	}
 
 	if user.Status != UserStatusActive {
@@ -822,7 +849,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, req RequestPasswordR
 		return err
 	}
 
-	resetLink := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.BaseURL, rawToken)
+	resetLink := s.tenantFrontendURL(ctx, "/reset-password?token="+url.QueryEscape(rawToken))
 	if err := s.mailer.Send(ctx, user.Email, "Reset your Nodus Health password", resetLink); err != nil {
 		s.log.Error("failed to send password reset email", "error", err.Error())
 	}

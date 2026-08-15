@@ -22,15 +22,17 @@ type RouteRegistrar interface {
 }
 
 type Config struct {
-	Port           string
-	AllowedOrigins []string
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
-	IdleTimeout    time.Duration
-	ShutdownGrace  time.Duration
-	RequestTimeout time.Duration
-	TenantResolver middleware.TenantResolver
-	TenantPool     *pgxpool.Pool
+	Port                  string
+	AllowedOrigins        []string
+	ReadTimeout           time.Duration
+	WriteTimeout          time.Duration
+	IdleTimeout           time.Duration
+	ShutdownGrace         time.Duration
+	RequestTimeout        time.Duration
+	TenantResolver        middleware.TenantResolver
+	TenantPool            *pgxpool.Pool
+	TenantBaseDomain      string
+	AllowTenantSlugHeader bool
 }
 
 type Server struct {
@@ -61,7 +63,9 @@ func New(cfg Config, log *logger.Logger, registrars ...RouteRegistrar) *Server {
 
 	r.Group(func(r chi.Router) {
 		if cfg.TenantResolver != nil {
-			r.Use(middleware.ResolveTenant(cfg.TenantResolver))
+			r.Use(middleware.ResolveTenant(cfg.TenantResolver, middleware.TenantHostConfig{
+				BaseDomain: cfg.TenantBaseDomain, AllowSlugHeader: cfg.AllowTenantSlugHeader,
+			}))
 		}
 		if cfg.TenantPool != nil {
 			r.Use(middleware.TenantTransaction(cfg.TenantPool))

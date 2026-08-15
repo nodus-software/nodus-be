@@ -14,14 +14,18 @@ import (
 
 type Config struct {
 	// Server
-	AppEnv         string
-	AppPort        string
-	BaseUrl        string
-	AllowedOrigins []string
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
-	IdleTimeout    time.Duration
-	ShutdownGrace  time.Duration
+	AppEnv                    string
+	AppPort                   string
+	BaseUrl                   string
+	TenantBaseDomain          string
+	TenantURLScheme           string
+	TenantURLPort             string
+	ReservedOrganizationSlugs []string
+	AllowedOrigins            []string
+	ReadTimeout               time.Duration
+	WriteTimeout              time.Duration
+	IdleTimeout               time.Duration
+	ShutdownGrace             time.Duration
 
 	// Main Database
 	DBHost     string
@@ -119,14 +123,18 @@ func Load() (*Config, error) {
 	development := appEnv != "production"
 
 	cfg := &Config{
-		AppEnv:         appEnv,
-		AppPort:        getEnv("APP_PORT", "8080"),
-		BaseUrl:        getEnv("BASE_URL", "http://localhost"),
-		AllowedOrigins: strings.Fields(getEnv("ALLOWED_ORIGINS", "")),
-		ReadTimeout:    getEnvDuration("READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:   getEnvDuration("WRITE_TIMEOUT", 15*time.Second),
-		IdleTimeout:    getEnvDuration("IDLE_TIMEOUT", 60*time.Second),
-		ShutdownGrace:  getEnvDuration("SHUTDOWN_GRACE", 10*time.Second),
+		AppEnv:                    appEnv,
+		AppPort:                   getEnv("APP_PORT", "8080"),
+		BaseUrl:                   getEnv("BASE_URL", "http://localhost"),
+		TenantBaseDomain:          strings.ToLower(strings.TrimSpace(getEnv("TENANT_BASE_DOMAIN", "localhost"))),
+		TenantURLScheme:           strings.ToLower(strings.TrimSpace(getEnv("TENANT_URL_SCHEME", developmentDefault(development, "http", "https")))),
+		TenantURLPort:             strings.TrimSpace(getEnv("TENANT_URL_PORT", "")),
+		ReservedOrganizationSlugs: strings.Fields(strings.ToLower(getEnv("RESERVED_ORGANIZATION_SLUGS", ""))),
+		AllowedOrigins:            strings.Fields(getEnv("ALLOWED_ORIGINS", "")),
+		ReadTimeout:               getEnvDuration("READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:              getEnvDuration("WRITE_TIMEOUT", 15*time.Second),
+		IdleTimeout:               getEnvDuration("IDLE_TIMEOUT", 60*time.Second),
+		ShutdownGrace:             getEnvDuration("SHUTDOWN_GRACE", 10*time.Second),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", developmentDefault(development, "5433", "5432")),
@@ -205,6 +213,18 @@ func Load() (*Config, error) {
 	}
 	if cfg.WebAuthnRPID == "" || len(cfg.WebAuthnOrigins) == 0 || cfg.WebAuthnCeremonyTTL <= 0 {
 		return nil, fmt.Errorf("WebAuthn RP ID, origins, and ceremony TTL must be configured")
+	}
+	if cfg.TenantBaseDomain == "" || strings.Contains(cfg.TenantBaseDomain, ":") {
+		return nil, fmt.Errorf("TENANT_BASE_DOMAIN must be a hostname without a port")
+	}
+	if cfg.TenantURLScheme != "http" && cfg.TenantURLScheme != "https" {
+		return nil, fmt.Errorf("TENANT_URL_SCHEME must be http or https")
+	}
+	if cfg.TenantURLPort != "" {
+		port, err := strconv.Atoi(cfg.TenantURLPort)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("TENANT_URL_PORT must be empty or a valid TCP port")
+		}
 	}
 
 	return cfg, nil

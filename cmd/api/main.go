@@ -45,6 +45,11 @@ func main() {
 		log.Fatal("failed to connect to database", "error", err.Error())
 	}
 	defer pool.Close()
+	if cfg.AppEnv == "production" {
+		if err := db.ValidateTenantRuntimeRole(ctx, pool); err != nil {
+			log.Fatal("unsafe database runtime role", "error", err.Error())
+		}
+	}
 
 	mfaKey, err := security.DecodeKey(cfg.MFAEncryptionKey)
 	if err != nil {
@@ -63,7 +68,10 @@ func main() {
 	})
 
 	authCfg := auth.Config{
-		BaseURL: cfg.BaseUrl,
+		BaseURL:          cfg.BaseUrl,
+		TenantBaseDomain: cfg.TenantBaseDomain,
+		TenantURLScheme:  cfg.TenantURLScheme,
+		TenantURLPort:    cfg.TenantURLPort,
 
 		JWTSecret:              cfg.JWTSecret,
 		AccessTokenTTL:         cfg.AccessTokenTTL,
@@ -126,6 +134,9 @@ func main() {
 	invitationRepo := invitationpg.New(pool)
 	invitationService := invitation.NewService(invitationRepo, auditService, mailer, emailRenderer, log, invitation.Config{
 		BaseURL:            cfg.BaseUrl,
+		TenantBaseDomain:   cfg.TenantBaseDomain,
+		TenantURLScheme:    cfg.TenantURLScheme,
+		TenantURLPort:      cfg.TenantURLPort,
 		InviteTokenTTL:     cfg.InviteTokenTTL,
 		EnrollmentTokenTTL: cfg.EnrollmentTokenTTL,
 		BcryptCost:         cfg.BcryptCost,
@@ -146,20 +157,28 @@ func main() {
 	clinicalHandler := clinical.NewHandler(clinicalService, authService, cfg.JWTSecret, log)
 
 	organizationService := organizations.NewService(
-		pool, mailer, emailRenderer, cfg.BaseUrl, cfg.BcryptCost, authCfg.PasswordPolicy, log,
+		pool, mailer, emailRenderer, organizations.Config{
+			BaseURL: cfg.BaseUrl, TenantBaseDomain: cfg.TenantBaseDomain, TenantURLScheme: cfg.TenantURLScheme, TenantURLPort: cfg.TenantURLPort,
+			ReservedSlugs: cfg.ReservedOrganizationSlugs, BcryptCost: cfg.BcryptCost, PasswordPolicy: authCfg.PasswordPolicy,
+		}, log,
 	)
+	if err := organizationService.ValidateReservedSlugs(ctx); err != nil {
+		log.Fatal("invalid reserved organization slug configuration", "error", err.Error())
+	}
 	organizationHandler := organizations.NewHandler(organizationService, authService, cfg.JWTSecret, cfg.EnrollmentTokenTTL)
 
 	srv := server.New(server.Config{
-		Port:           cfg.AppPort,
-		AllowedOrigins: cfg.AllowedOrigins,
-		ReadTimeout:    cfg.ReadTimeout,
-		WriteTimeout:   cfg.WriteTimeout,
-		IdleTimeout:    cfg.IdleTimeout,
-		ShutdownGrace:  cfg.ShutdownGrace,
-		RequestTimeout: cfg.WriteTimeout,
-		TenantResolver: organizationService,
-		TenantPool:     pool,
+		Port:                  cfg.AppPort,
+		AllowedOrigins:        cfg.AllowedOrigins,
+		ReadTimeout:           cfg.ReadTimeout,
+		WriteTimeout:          cfg.WriteTimeout,
+		IdleTimeout:           cfg.IdleTimeout,
+		ShutdownGrace:         cfg.ShutdownGrace,
+		RequestTimeout:        cfg.WriteTimeout,
+		TenantResolver:        organizationService,
+		TenantPool:            pool,
+		TenantBaseDomain:      cfg.TenantBaseDomain,
+		AllowTenantSlugHeader: cfg.AppEnv != "production",
 	}, log, organizationHandler, authHandler, rolesHandler, usersHandler, invitationHandler, auditHandler, patientsHandler, clinicalHandler)
 
 	log.Info("starting nodus health api", "env", cfg.AppEnv, "port", cfg.AppPort)

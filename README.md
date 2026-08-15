@@ -169,16 +169,16 @@ up migrations only.
 
 ## API usage and documentation
 
-This is a multi-tenant API. Public organization registration and slug-check
-requests do not need tenant context. Most other routes require the tenant slug:
+This is a multi-tenant API. Production requests resolve the tenant from the
+hostname:
 
 ```text
-X-Tenant-Slug: example-clinic
+https://example-clinic.example.com
 ```
 
-Local clients should send that header. Production resolves the tenant from the
-left-most hostname label and should strip client-supplied tenant headers at the
-edge. Authenticated requests also use:
+Local clients may send `X-Tenant-Slug`; production ignores it. Public organization
+registration, slug checks, and verified organization discovery are available only
+on `TENANT_BASE_DOMAIN`. Authenticated requests also use:
 
 ```text
 Authorization: Bearer <access-token>

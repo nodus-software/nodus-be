@@ -11,6 +11,7 @@ import (
 
 	"nodus-health/internal/clinical"
 	"nodus-health/internal/platform/db"
+	"nodus-health/internal/tenant"
 	"nodus-health/pkg/utility"
 )
 
@@ -62,7 +63,11 @@ func (r *Repository) ListResources(c context.Context, k string) ([]clinical.Reso
 	if e != nil {
 		return nil, e
 	}
-	rows, e := r.exec(c).Query(c, "SELECT "+cols+" FROM "+t+" ORDER BY name")
+	tenantID, e := tenant.ID(c)
+	if e != nil {
+		return nil, e
+	}
+	rows, e := r.exec(c).Query(c, "SELECT "+cols+" FROM "+t+" WHERE tenant_id=$1 ORDER BY name", tenantID)
 	if e != nil {
 		return nil, e
 	}

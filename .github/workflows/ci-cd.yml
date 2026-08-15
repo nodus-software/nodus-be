@@ -90,7 +90,7 @@ jobs:
         run: |
           go run ./cmd/migrate
           version="$(psql --host 127.0.0.1 --username nodus --dbname nodus_ci --tuples-only --no-align --command 'SELECT version FROM schema_migrations')"
-          test "${version}" = "22"
+          test "${version}" = "23"
 
   package:
     name: Publish image

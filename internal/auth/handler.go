@@ -38,7 +38,7 @@ func NewHandler(service *Service, jwtSecret string, log *logger.Logger, cookieCo
 
 func (h *Handler) setRefreshCookie(w http.ResponseWriter, pair *TokenPairResponse) {
 	cookie := &http.Cookie{
-		Name: h.refreshCookie.Name, Value: pair.RefreshToken, Path: "/auth",
+		Name: h.refreshCookie.Name, Value: pair.RefreshToken, Path: "/",
 		Domain: h.refreshCookie.Domain, HttpOnly: true, Secure: h.refreshCookie.Secure,
 		SameSite: h.refreshCookie.SameSite,
 	}
@@ -51,7 +51,7 @@ func (h *Handler) setRefreshCookie(w http.ResponseWriter, pair *TokenPairRespons
 
 func (h *Handler) clearRefreshCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name: h.refreshCookie.Name, Value: "", Path: "/auth", Domain: h.refreshCookie.Domain,
+		Name: h.refreshCookie.Name, Value: "", Path: "/", Domain: h.refreshCookie.Domain,
 		HttpOnly: true, Secure: h.refreshCookie.Secure, SameSite: h.refreshCookie.SameSite,
 		MaxAge: -1, Expires: time.Unix(1, 0).UTC(),
 	})

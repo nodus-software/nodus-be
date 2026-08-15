@@ -29,10 +29,10 @@ func TestInvite_GoldenPath_CreatesPendingUserAndSendsEmail(t *testing.T) {
 		t.Fatal("expected an invitation email to be sent with a token")
 	}
 	mail := env.Mailer.Sent[len(env.Mailer.Sent)-1]
-	if !strings.Contains(mail.Text, "https://app.test/invite?token=") || !strings.Contains(mail.Text, "&tenant=nodus-test") {
+	if !strings.Contains(mail.Text, "https://app.test/invite?token=") || strings.Contains(mail.Text, "tenant=") {
 		t.Fatalf("expected password-setup URL in text email, got %q", mail.Text)
 	}
-	if !strings.Contains(mail.HTML, "Accept invitation") || !strings.Contains(mail.HTML, "https://app.test/invite?token=") || !strings.Contains(mail.HTML, "&amp;tenant=nodus-test") {
+	if !strings.Contains(mail.HTML, "Accept invitation") || !strings.Contains(mail.HTML, "https://app.test/invite?token=") || strings.Contains(mail.HTML, "tenant=") {
 		t.Fatal("expected a rendered HTML invitation with a password-setup link")
 	}
 }

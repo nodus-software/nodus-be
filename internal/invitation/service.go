@@ -29,12 +29,26 @@ type AuditRecorder interface {
 // definition shared by change-password, reset-password, and accept-invite.
 type Config struct {
 	BaseURL            string
+	TenantBaseDomain   string
+	TenantURLScheme    string
+	TenantURLPort      string
 	InviteTokenTTL     time.Duration
 	EnrollmentTokenTTL time.Duration
 	BcryptCost         int
 	OrganizationName   string
 	PasswordPolicy     auth.PasswordPolicy
 	AccessReviewCycle  time.Duration
+}
+
+func (s *Service) tenantURL(identity tenant.Identity, path string) string {
+	if s.cfg.TenantBaseDomain != "" && s.cfg.TenantURLScheme != "" {
+		port := ""
+		if s.cfg.TenantURLPort != "" {
+			port = ":" + s.cfg.TenantURLPort
+		}
+		return fmt.Sprintf("%s://%s.%s%s%s", s.cfg.TenantURLScheme, identity.Slug, s.cfg.TenantBaseDomain, port, path)
+	}
+	return strings.TrimRight(s.cfg.BaseURL, "/") + path
 }
 
 type Service struct {
@@ -71,7 +85,7 @@ func (s *Service) invitationLink(ctx context.Context, rawToken string) (string, 
 	if !ok {
 		return "", tenant.ErrMissing
 	}
-	return fmt.Sprintf("%s/invite?token=%s&tenant=%s", strings.TrimRight(s.cfg.BaseURL, "/"), url.QueryEscape(rawToken), url.QueryEscape(identity.Slug)), nil
+	return s.tenantURL(identity, "/invite?token="+url.QueryEscape(rawToken)), nil
 }
 
 // Invite creates a pending user (status=invited), assigns their roles, and
@@ -190,7 +204,7 @@ func (s *Service) reactivationLink(ctx context.Context, rawToken string) (string
 	if !ok {
 		return "", tenant.ErrMissing
 	}
-	return fmt.Sprintf("%s/reactivate?token=%s&tenant=%s", strings.TrimRight(s.cfg.BaseURL, "/"), url.QueryEscape(rawToken), url.QueryEscape(identity.Slug)), nil
+	return s.tenantURL(identity, "/reactivate?token="+url.QueryEscape(rawToken)), nil
 }
 
 func (s *Service) sendReactivationEmail(ctx context.Context, user *PendingUser, link string, expiresAt time.Time) {

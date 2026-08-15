@@ -70,6 +70,9 @@ func TestLoginMFA_GoldenPath_IssuesTokenPair(t *testing.T) {
 	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].Value == "" {
 		t.Fatalf("expected an HttpOnly refresh cookie, got %#v", cookies)
 	}
+	if cookies[0].Path != "/" {
+		t.Fatalf("refresh cookie path = %q, want / so reverse-proxy prefixes can send it", cookies[0].Path)
+	}
 }
 
 func TestLoginMFA_WrongCode_Returns401(t *testing.T) {

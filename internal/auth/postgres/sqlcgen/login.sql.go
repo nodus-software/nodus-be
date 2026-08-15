@@ -194,7 +194,7 @@ func (q *Queries) LockUser(ctx context.Context, arg LockUserParams) error {
 
 const resetFailedLoginAttempts = `-- name: ResetFailedLoginAttempts :exec
 UPDATE users
-SET failed_login_attempts = 0
+SET failed_login_attempts = 0, locked_until = NULL
 WHERE id = $1
 `
 

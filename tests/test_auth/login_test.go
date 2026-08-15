@@ -3,6 +3,7 @@ package test_auth
 import (
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestLogin_GoldenPath_IssuesChallenge(t *testing.T) {
@@ -29,6 +30,28 @@ func TestLogin_GoldenPath_IssuesChallenge(t *testing.T) {
 	}
 	if len(resp.MFAMethods) != 1 || resp.MFAMethods[0] != "totp" {
 		t.Fatalf("expected mfa_methods=[totp], got %v", resp.MFAMethods)
+	}
+}
+
+func TestLogin_ExpiredLockStartsFreshAttemptWindow(t *testing.T) {
+	env := Setup(t)
+	userID := env.CreateUser(t, "jdoe", "jdoe@example.com", "Sup3rSecret!Pass")
+	env.EnrollTOTP(t, userID)
+	user := env.Repo.users[userID]
+	user.FailedLoginAttempts = env.Cfg.LockoutMaxAttempts
+	expired := time.Now().Add(-time.Minute)
+	user.LockedUntil = &expired
+	env.Repo.users[userID] = user
+
+	rec := env.JSON(t, http.MethodPost, "/auth/login", "", map[string]string{
+		"email": "jdoe@example.com", "password": "wrong-password",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected a fresh 401 attempt after lock expiry, got %d: %s", rec.Code, rec.Body.String())
+	}
+	updated := env.Repo.users[userID]
+	if updated.FailedLoginAttempts != 1 || updated.LockedUntil != nil {
+		t.Fatalf("attempts=%d locked_until=%v", updated.FailedLoginAttempts, updated.LockedUntil)
 	}
 }
 

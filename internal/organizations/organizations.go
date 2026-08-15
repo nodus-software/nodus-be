@@ -2,16 +2,20 @@ package organizations
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -28,6 +32,21 @@ import (
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9-]{3,32}$`)
 var errInvalidSlug = errors.New("slug must be 3-32 lowercase letters, numbers, or hyphens")
+var errDiscoveryRateLimited = errors.New("too many organization discovery requests")
+var errDiscoveryAccountNotFound = errors.New("no active account was found for that email")
+var errDiscoveryTokenInvalid = errors.New("invalid or expired sign-in handoff")
+
+var mandatoryReservedSlugs = []string{"app", "api", "www", "admin", "mail", "info", "noreply", "support", "status"}
+
+type Config struct {
+	BaseURL          string
+	TenantBaseDomain string
+	TenantURLScheme  string
+	TenantURLPort    string
+	ReservedSlugs    []string
+	BcryptCost       int
+	PasswordPolicy   auth.PasswordPolicy
+}
 
 type Organization struct {
 	ID               string    `json:"id"`
@@ -54,28 +73,167 @@ type AcceptRequest struct {
 	Password string `json:"password"`
 }
 
+type DiscoveryRequest struct {
+	Email string `json:"email"`
+}
+
+type DiscoveryVerifyRequest struct {
+	Token string `json:"token"`
+	Slug  string `json:"slug"`
+}
+
+type DiscoveryResponse struct {
+	LoginURL string `json:"login_url"`
+}
+
+type DiscoveryVerifyResponse struct {
+	Email string `json:"email"`
+}
+
 type Mailer interface {
 	SendHTML(ctx context.Context, to, subject, textBody, htmlBody string) error
 }
 
 type Service struct {
-	pool       *pgxpool.Pool
-	mailer     Mailer
-	baseURL    string
-	bcryptCost int
-	policy     auth.PasswordPolicy
-	log        *logger.Logger
-	email      *email.Renderer
+	pool             *pgxpool.Pool
+	mailer           Mailer
+	baseURL          string
+	bcryptCost       int
+	policy           auth.PasswordPolicy
+	log              *logger.Logger
+	email            *email.Renderer
+	tenantBaseDomain string
+	tenantURLScheme  string
+	tenantURLPort    string
+	reservedSlugs    map[string]struct{}
 }
 
-func NewService(pool *pgxpool.Pool, mailer Mailer, renderer *email.Renderer, baseURL string, bcryptCost int, policy auth.PasswordPolicy, log *logger.Logger) *Service {
-	return &Service{
-		pool: pool, mailer: mailer, baseURL: baseURL, bcryptCost: bcryptCost,
-		policy: policy, log: log, email: renderer,
+func NewService(pool *pgxpool.Pool, mailer Mailer, renderer *email.Renderer, cfg Config, log *logger.Logger) *Service {
+	reserved := make(map[string]struct{}, len(mandatoryReservedSlugs)+len(cfg.ReservedSlugs))
+	for _, slug := range append(mandatoryReservedSlugs, cfg.ReservedSlugs...) {
+		reserved[strings.ToLower(strings.TrimSpace(slug))] = struct{}{}
 	}
+	return &Service{pool: pool, mailer: mailer, baseURL: cfg.BaseURL, bcryptCost: cfg.BcryptCost,
+		policy: cfg.PasswordPolicy, log: log, email: renderer, tenantBaseDomain: cfg.TenantBaseDomain,
+		tenantURLScheme: cfg.TenantURLScheme, tenantURLPort: cfg.TenantURLPort, reservedSlugs: reserved}
+}
+
+func (s *Service) isReservedSlug(slug string) bool {
+	_, reserved := s.reservedSlugs[strings.ToLower(strings.TrimSpace(slug))]
+	return reserved
+}
+
+func (s *Service) ValidateReservedSlugs(ctx context.Context) error {
+	slugs := make([]string, 0, len(s.reservedSlugs))
+	for slug := range s.reservedSlugs {
+		slugs = append(slugs, slug)
+	}
+	var conflict string
+	err := s.pool.QueryRow(ctx, `SELECT slug FROM organizations WHERE slug = ANY($1::text[]) LIMIT 1`, slugs).Scan(&conflict)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("organization slug %q is reserved; rename it before starting the API", conflict)
+}
+
+func (s *Service) tenantURL(slug, path string) string {
+	port := ""
+	if s.tenantURLPort != "" {
+		port = ":" + s.tenantURLPort
+	}
+	return fmt.Sprintf("%s://%s.%s%s%s", s.tenantURLScheme, slug, s.tenantBaseDomain, port, path)
+}
+
+func normalizeEmail(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	parsed, err := mail.ParseAddress(value)
+	return value, err == nil && strings.EqualFold(parsed.Address, value)
+}
+
+func (s *Service) RequestOrganizationDiscovery(ctx context.Context, emailAddress, ip string) (*DiscoveryResponse, error) {
+	emailAddress, valid := normalizeEmail(emailAddress)
+	if !valid {
+		return nil, errors.New("a valid email is required")
+	}
+	emailHash := fmt.Sprintf("%x", sha256.Sum256([]byte(emailAddress)))
+	var emailCount, ipCount int
+	err := s.pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM organization_discovery_requests WHERE email_hash=$1 AND created_at>now()-interval '1 hour'),
+		(SELECT count(*) FROM organization_discovery_requests WHERE ip_address=$2 AND created_at>now()-interval '1 hour')`, emailHash, ip).Scan(&emailCount, &ipCount)
+	if err != nil {
+		return nil, err
+	}
+	if emailCount >= 5 || ipCount >= 20 {
+		return nil, errDiscoveryRateLimited
+	}
+	requestID, err := utility.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO organization_discovery_requests(id,email_hash,ip_address) VALUES($1,$2,$3)`, requestID, emailHash, ip); err != nil {
+		return nil, err
+	}
+	var slug string
+	if err = s.pool.QueryRow(ctx, `SELECT slug FROM discover_active_organizations($1) LIMIT 1`, emailAddress).Scan(&slug); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errDiscoveryAccountNotFound
+		}
+		return nil, err
+	}
+	rawToken, err := security.GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	tokenID, err := utility.GenerateUUID()
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO organization_discovery_tokens(id,email,token_hash,expires_at) VALUES($1,$2,$3,$4)`,
+		tokenID, emailAddress, security.HashToken(rawToken), time.Now().Add(15*time.Minute)); err != nil {
+		return nil, err
+	}
+	return &DiscoveryResponse{LoginURL: s.tenantURL(slug, "/login?discovery_token="+url.QueryEscape(rawToken))}, nil
+}
+
+func (s *Service) VerifyOrganizationDiscovery(ctx context.Context, rawToken, slug string) (*DiscoveryVerifyResponse, error) {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if strings.TrimSpace(rawToken) == "" || !slugPattern.MatchString(slug) {
+		return nil, errDiscoveryTokenInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var tokenID, emailAddress string
+	err = tx.QueryRow(ctx, `SELECT id::text,email FROM organization_discovery_tokens
+		WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() FOR UPDATE`, security.HashToken(rawToken)).Scan(&tokenID, &emailAddress)
+	if err != nil {
+		return nil, errDiscoveryTokenInvalid
+	}
+	var matches bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM discover_active_organizations($1) WHERE slug=$2)`, emailAddress, slug).Scan(&matches); err != nil {
+		return nil, err
+	}
+	if !matches {
+		return nil, errDiscoveryTokenInvalid
+	}
+	if _, err = tx.Exec(ctx, `UPDATE organization_discovery_tokens SET used_at=now() WHERE id=$1`, tokenID); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &DiscoveryVerifyResponse{Email: emailAddress}, nil
 }
 
 func (s *Service) ResolveTenant(ctx context.Context, slug string) (tenant.Identity, error) {
+	if s.isReservedSlug(slug) || !slugPattern.MatchString(slug) {
+		return tenant.Identity{}, errors.New("organization not found")
+	}
 	var id, status string
 	err := s.pool.QueryRow(ctx, `SELECT id::text, status::text FROM organizations WHERE slug=$1`, strings.ToLower(slug)).Scan(&id, &status)
 	if err != nil || status == "suspended" {
@@ -85,7 +243,7 @@ func (s *Service) ResolveTenant(ctx context.Context, slug string) (tenant.Identi
 }
 
 func (s *Service) SlugAvailable(ctx context.Context, slug string) (bool, error) {
-	if !slugPattern.MatchString(slug) {
+	if !slugPattern.MatchString(slug) || s.isReservedSlug(slug) {
 		return false, nil
 	}
 	var exists bool
@@ -96,7 +254,7 @@ func (s *Service) SlugAvailable(ctx context.Context, slug string) (bool, error) 
 func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organization, error) {
 	req.Slug = strings.ToLower(strings.TrimSpace(req.Slug))
 	req.AdminEmail = strings.ToLower(strings.TrimSpace(req.AdminEmail))
-	if !slugPattern.MatchString(req.Slug) {
+	if !slugPattern.MatchString(req.Slug) || s.isReservedSlug(req.Slug) {
 		return nil, errInvalidSlug
 	}
 	tenantID, _ := utility.GenerateUUID()
@@ -155,12 +313,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	link := fmt.Sprintf(
-		"%s/activate-organization?token=%s&slug=%s",
-		s.baseURL,
-		url.QueryEscape(rawToken),
-		url.QueryEscape(req.Slug),
-	)
+	link := s.tenantURL(req.Slug, "/activate-organization?token="+url.QueryEscape(rawToken))
 	rendered, err := s.email.RenderOrganizationActivation(email.OrganizationActivationData{
 		CommonData: email.CommonData{
 			RecipientName: req.AdminFullName, OrganizationName: req.OrganizationName,
@@ -275,7 +428,9 @@ func seedDefaultOutpatientConfiguration(ctx context.Context, tx interface {
 		)
 		INSERT INTO service_points(id, department_id, code, name, kind)
 		SELECT gen_random_uuid(), d.id, s.code, s.name, s.kind
-		FROM service_points_seed s JOIN departments d ON d.code=s.department_code;
+		FROM service_points_seed s
+		JOIN departments d ON d.code=s.department_code
+			AND d.tenant_id=NULLIF(current_setting('app.tenant_id', true), '')::uuid;
 
 		WITH queues_seed(service_point_code, code, name) AS (VALUES
 			('OPD-TRIAGE', 'OPD-TRIAGE-Q', 'Outpatient Triage Queue'),
@@ -285,7 +440,9 @@ func seedDefaultOutpatientConfiguration(ctx context.Context, tx interface {
 		)
 		INSERT INTO queues(id, service_point_id, code, name)
 		SELECT gen_random_uuid(), sp.id, s.code, s.name
-		FROM queues_seed s JOIN service_points sp ON sp.code=s.service_point_code;
+		FROM queues_seed s
+		JOIN service_points sp ON sp.code=s.service_point_code
+			AND sp.tenant_id=NULLIF(current_setting('app.tenant_id', true), '')::uuid;
 
 		WITH rules(name, event_type, visit_type, encounter_type, order_kind, service_category, queue_code, priority) AS (VALUES
 			('Default outpatient check-in to triage', 'visit.created', 'outpatient', NULL, NULL, NULL, 'OPD-TRIAGE-Q', 0::smallint),
@@ -297,7 +454,9 @@ func seedDefaultOutpatientConfiguration(ctx context.Context, tx interface {
 		INSERT INTO queue_routing_rules(id, name, event_type, visit_type, encounter_type, order_kind, service_category, target_queue_id, priority)
 		SELECT gen_random_uuid(), r.name, r.event_type, r.visit_type::clinical_visit_type,
 		       r.encounter_type::clinical_encounter_type, r.order_kind, r.service_category, q.id, r.priority
-		FROM rules r JOIN queues q ON q.code=r.queue_code`)
+		FROM rules r
+		JOIN queues q ON q.code=r.queue_code
+			AND q.tenant_id=NULLIF(current_setting('app.tenant_id', true), '')::uuid`)
 	return err
 }
 
@@ -385,12 +544,64 @@ func NewHandler(s *Service, authorizer middleware.Authorizer, jwtSecret string, 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/organizations/check-slug", h.checkSlug)
 	r.Post("/organizations", h.register)
+	r.Post("/auth/organization-discovery/request", h.requestDiscovery)
+	r.Post("/auth/organization-discovery/verify", h.verifyDiscovery)
 	r.Post("/organizations/activations/{token}/accept", h.accept)
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Authenticate(h.jwtSecret, h.authorizer))
 		r.Get("/organizations/current", h.current)
 		r.With(middleware.RequirePermission("admin:organizations:write")).Patch("/organizations/current", h.update)
 	})
+}
+
+func requestIP(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func (h *Handler) requestDiscovery(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode[DiscoveryRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.RequestOrganizationDiscovery(r.Context(), req.Email, requestIP(r))
+	if err != nil {
+		if errors.Is(err, errDiscoveryRateLimited) {
+			response.Error(w, http.StatusTooManyRequests, "RATE_LIMITED", err.Error())
+			return
+		}
+		if err.Error() == "a valid email is required" {
+			response.BadRequest(w, err.Error())
+			return
+		}
+		if errors.Is(err, errDiscoveryAccountNotFound) {
+			response.NotFound(w, err.Error())
+			return
+		}
+		h.service.log.Error("organization discovery request failed", "error", err.Error())
+		response.Internal(w)
+		return
+	}
+	response.OK(w, result)
+}
+
+func (h *Handler) verifyDiscovery(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode[DiscoveryVerifyRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.VerifyOrganizationDiscovery(r.Context(), req.Token, req.Slug)
+	if err != nil {
+		response.BadRequest(w, errDiscoveryTokenInvalid.Error())
+		return
+	}
+	response.OK(w, result)
 }
 
 func decode[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
@@ -424,8 +635,14 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			response.Conflict(w, "organization slug or admin email is already registered")
-			return
+			switch pgErr.ConstraintName {
+			case "organizations_slug_key":
+				response.Conflict(w, "organization code is already registered")
+				return
+			case "users_email_lower_key", "users_tenant_email_key", "users_tenant_username_key":
+				response.Conflict(w, "admin email is already registered")
+				return
+			}
 		}
 		h.service.log.Error("failed to register organization", "error", err.Error())
 		response.Internal(w)

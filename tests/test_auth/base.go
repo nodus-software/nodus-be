@@ -319,6 +319,7 @@ func (r *memoryRepo) ResetFailedLoginAttempts(_ context.Context, id string) erro
 		return e
 	}
 	u.FailedLoginAttempts = 0
+	u.LockedUntil = nil
 	r.users[id] = *u
 	return nil
 }

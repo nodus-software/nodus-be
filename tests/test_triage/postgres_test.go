@@ -147,8 +147,10 @@ func TestPostgresTriageDefaultsStartAndRouting(t *testing.T) {
 	assertTenantDefaults(t, pool, legacyTenantID)
 
 	organizationService := organizations.NewService(
-		pool, stubMailer{}, email.NewRenderer(email.CommonData{}), "http://localhost", 4,
-		auth.PasswordPolicy{}, logger.NewLogger(),
+		pool, stubMailer{}, email.NewRenderer(email.CommonData{}), organizations.Config{
+			BaseURL: "http://localhost", TenantBaseDomain: "localhost", TenantURLScheme: "http",
+			BcryptCost: 4, PasswordPolicy: auth.PasswordPolicy{},
+		}, logger.NewLogger(),
 	)
 	createdOrganization, err := organizationService.Register(ctx, organizations.RegisterRequest{
 		OrganizationName: "New Clinic", Slug: "new-clinic-" + legacyTenantID[:6],

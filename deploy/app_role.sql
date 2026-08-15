@@ -25,6 +25,7 @@ ALTER ROLE nodus_app NOSUPERUSER NOBYPASSRLS;
 GRANT USAGE ON SCHEMA public TO nodus_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nodus_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nodus_app;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO nodus_app;
 
 -- Tables created by later migrations are granted automatically, so this file
 -- does not have to be re-run every time the schema grows.
@@ -32,3 +33,5 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO nodus_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO nodus_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO nodus_app;

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"nodus-health/internal/invitation"
 	"nodus-health/internal/invitation/postgres/sqlcgen"
@@ -75,6 +76,10 @@ func (r *Repository) CreateInvitedUser(ctx context.Context, params invitation.Cr
 		ID: params.ID, FullName: params.FullName, Username: params.Username,
 		Email: params.Email, ProviderIdentifier: params.ProviderIdentifier,
 	})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return invitation.ErrEmailAlreadyExists
+	}
 	return err
 }
 
