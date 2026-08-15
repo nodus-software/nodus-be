@@ -1,0 +1,278 @@
+# Recoverable Account Security — Six-Phase Plan
+
+  ## Summary
+
+  Use six independently deployable phases. Phases 1–5 cover the current organization-scoped application; Phase 6 is
+  the intentionally deferred platform-recovery control plane.
+
+  This remains an enhancement of the existing auth, users, invitation, audit, email, session, and tenant patterns. It
+  is too risky for one implementation pass because the schema foundations and observability must exist before
+  enforcement or recovery changes are activated.
+
+  ## Current System
+
+  - Login uses email/password to issue a five-minute MFA challenge; TOTP, WebAuthn, or a single-use hashed recovery
+    code completes authentication.
+
+  - Failed password and MFA attempts currently share users.failed_login_attempts and locked_until. Five failures
+    produce a 15-minute lock.
+
+  - Successful complete MFA authentication resets failed attempts. The recent correction also clears expired lock
+    state before starting a new attempt window.
+
+  - Password-reset tokens are random, hashed, short-lived, single-use, rate-limited by username and IP, and revoke
+    sessions upon completion.
+
+  - MFA secrets use AES-256-GCM; recovery codes are hashed and single-use.
+  - Authenticated middleware rechecks the session and current account status on every request, so session revocation
+    and status changes take effect immediately.
+
+  - Users have active, suspended, deactivated, invited, and pending_review states. Deactivation already uses a secure
+    reactivation invitation and MFA reset.
+
+  - Tenant isolation is enforced through tenant context and PostgreSQL RLS.
+  - Audit records are application-level append-only, but the runtime database role currently retains UPDATE and DELETE
+    privileges.
+
+  - Redis is configured and deployed but has no client or rate-limit implementation.
+  - Email is synchronous SMTP with no durable retry queue.
+  - CAPTCHA and platform-administrator identities do not currently exist.
+
+  Relevant areas include internal/auth, internal/users, internal/invitation, internal/audit, the migration directory,
+  and frontend authentication/admin screens under /home/beryl_atieno/workspace/nodus/nodus-fe/src/features.
+
+  ## Current Problems
+
+  - Password and MFA failures corrupt the same counter and cannot be analyzed or throttled independently.
+  - Lockout state is exposed through a distinct 423 ACCOUNT_LOCKED response, enabling account-state discovery.
+  - There is no observation window, bounded delay timestamp, repeated-lock escalation, atomic concurrency policy, or
+    layered organization/IP control.
+
+  - An attacker can intentionally consume a known account’s failure budget.
+  - Password recovery does not provide a dedicated lost-MFA path or explicitly clear only automatic restrictions.
+  - Suspension lacks actor, timestamp, and reason columns; generic user updates can transition suspension state.
+  - deactivated represents disabled accounts but only records deactivated_at, not actor and reason.
+  - The users:unlock endpoint treats administrator intervention as the normal lockout solution.
+  - The audit schema lacks target-user, request, user-agent, reason-code, and privileged-reference fields, and
+    database permissions do not enforce append-only behavior.
+
+  - Notification failures are neither durable nor retryable.
+  - No platform identity boundary exists; tenant superusers must not be repurposed as platform administrators.
+
+  ## Implementation Phases
+
+  ### Phase 1 — Security Foundations and Observation
+
+  - Add a tenant-scoped authentication_failure_states table keyed by user and mechanism (password, mfa, recovery,
+    captcha) with atomic count, window start, last failure, next-attempt timestamp, lock expiry, lock-cycle count, and
+    cycle-window start.
+
+  - Preserve existing users by migrating active locked_until values into password failure state without creating new
+    suspensions. Retain compatibility reads during rollout, then remove obsolete fields in a later cleanup migration.
+
+  - Use a fixed 15-minute observation window. Expired windows reset count and delay state. Lock cycles decay after 24
+    hours.
+
+  - Add centralized configuration for thresholds, window lengths, delays, lock durations, Redis limits, observation/
+    enforcement mode, Turnstile, and recovery limits.
+
+  - Add a narrow Redis rate-limit store using the existing Redis deployment. Redis stores only TTL-bound HMAC-derived
+    identifier, IP, organization, and weak request-context counters; PostgreSQL remains authoritative for durable
+    account restrictions.
+
+  - On Redis failure, continue enforcing PostgreSQL account/mechanism controls, temporarily skip supplemental
+    distributed limits, and emit a security event and operational error. Never fail all login traffic solely because
+    Redis is unavailable.
+
+  - Harden the existing audit table rather than create a competing audit source: add target user, request ID, user
+    agent, reason code, and privileged reference; revoke runtime UPDATE/DELETE; retain tenant RLS.
+
+  - Add a transactional notification outbox. State changes commit with notification jobs; an in-process bounded worker
+    retries SMTP delivery with backoff and records terminal failures.
+
+  - Deploy this phase in observation mode: calculate decisions and record events without changing externally visible
+    login behavior.
+
+  ### Phase 2 — Adaptive Login Defense and Turnstile
+
+  - Replace shared failed-attempt mutations with atomic mechanism-specific repository operations.
+  - Password policy:
+      - Failures 1–5 return the normal generic authentication failure.
+      - Attempts after five failures require server-verified Cloudflare Turnstile.
+      - Accepted attempts 6–9 receive non-blocking delays of 2, 4, 8, 16, then at most 30 seconds through
+        next_attempt_at.
+
+      - The tenth password failure within the window applies a temporary login restriction.
+      - Lock cycles within 24 hours last 15, 30, then 60 minutes; 60 minutes is the maximum.
+
+  - Turnstile verification is server-side, timeout-bounded, and separately rate-limited. Development uses an explicit
+    deterministic test verifier; production never fabricates success.
+
+  - When Turnstile is unavailable after it has become required, return a generic temporary-unavailable response and
+    offer recovery; do not silently bypass it.
+
+  - Unknown and known emails go through equivalent normalization, HMAC identifier throttling, dummy password work,
+    response status, body shape, and CAPTCHA transitions.
+
+  - Use account, IP, tenant, endpoint, and weak user-agent/request context layers. IP and tenant thresholds remain
+    generous and never lock an organization or individual account.
+
+  - Password success only issues an MFA challenge. Password state is reset only after successful MFA/session
+    establishment.
+
+  - MFA failures update only MFA state; recovery-code and CAPTCHA failures update only their respective states.
+  - Replace externally visible locked/suspended/disabled distinctions with one generic login response. Use 429 only
+    for identifier-independent throttling or challenge requirements that unknown identifiers can reach identically.
+
+  - Update the frontend to render Turnstile only when requested, handle retry timing without automatic resubmission,
+    and stop routing ordinary temporary locks to a revealing status page.
+
+  ### Phase 3 — Unified Self-Service Recovery
+
+  - Adapt password reset into a generic POST /auth/recovery/request flow accepting email, recovery intent (password,
+    mfa, or both), and optional Turnstile token. Always return the same accepted response.
+
+  - Send one active short-lived email token per user and intent; replacement invalidates earlier tokens and issuance
+    is throttled by identifier, IP, tenant, and recipient.
+
+  - POST /auth/recovery/verify consumes the email token and returns a separately hashed, short-lived recovery-session
+    token with explicit capabilities.
+
+  - Per the selected policy, verified email alone may authorize lost-MFA replacement. Mitigate mailbox compromise with
+    short TTLs, single use, Turnstile, aggressive verification limits, security notifications, full session
+    revocation, and audit events.
+
+  - Password completion updates only the password when requested. MFA recovery creates a pending replacement factor
+    while preserving the old factor until the new TOTP/WebAuthn factor is confirmed.
+
+  - On confirmed MFA replacement, atomically delete superseded factors and recovery codes, activate the replacement,
+    issue new recovery codes once, consume the recovery session, revoke all sessions and refresh tokens, and clear
+    automatic password/MFA lock state.
+
+  - Recovery never clears suspension, deactivation, organization suspension, or policy restrictions.
+  - Reused, replaced, expired, or over-attempted tokens return the same public failure. Raw tokens, OTPs, secrets,
+    CAPTCHA tokens, and recovery codes never enter logs.
+
+  - Keep the existing recovery-code login path; successful complete login with a recovery code allows the
+    authenticated security screen to replace MFA through strong reauthentication.
+
+  Public API additions:
+
+  - POST /auth/recovery/request
+  - POST /auth/recovery/verify
+  - POST /auth/recovery/password
+  - POST /auth/recovery/mfa/totp/setup
+  - POST /auth/recovery/mfa/totp/confirm
+  - Equivalent WebAuthn recovery registration endpoints using existing WebAuthn DTO patterns
+
+  Existing password-reset endpoints remain temporarily as compatibility adapters, then are deprecated after frontend
+  migration.
+
+  ### Phase 4 — Explicit Account Status Management
+
+  - Keep user.status as the single current-state source. Treat existing deactivated as the disabled state; do not add
+    a competing disabled enum value.
+
+  - Add suspension and deactivation actor/reason/timestamp columns. Backfill existing states conservatively with null
+    actor and migration reason.
+
+  - Replace status mutation through generic PATCH /users/{id} with explicit, idempotent endpoints:
+      - POST /users/{id}/suspend
+      - POST /users/{id}/restore
+      - Existing deactivate and reactivation-invitation endpoints remain, enriched with reason/actor metadata.
+
+  - Suspension and deactivation immediately revoke sessions, refresh tokens, login challenges, enrollment tokens, and
+    recovery sessions.
+
+  - Password reset, MFA recovery, lock expiry, and administrative unlock cannot restore a suspended or deactivated
+    account.
+
+  - Authorized organization administrators may suspend/restore users only inside their tenant. They cannot suspend
+    themselves, operate across tenants, or bypass role hierarchy.
+
+  - Preserve the existing transaction-level last-superuser lock and extend it to suspension, deactivation, demotion,
+    and role replacement.
+
+  - Disabled accounts are restorable only through the selected administrator-initiated, single-use reactivation
+    invitation, which requires password setup and MFA re-enrollment.
+
+  - Retire routine use of users:unlock; retain it temporarily for compatibility and emergency visibility, then remove
+    it once self-service recovery is established.
+
+  - Add authorized account-security status output showing explicit suspension/deactivation metadata and temporary
+    restriction summaries without secrets.
+
+  ### Phase 5 — Enforcement, Operations, and Hardening
+
+  - Review observation metrics for false positives, shared-clinic IP behavior, Turnstile accessibility, email
+    delivery, and recovery completion.
+
+  - Enable enforcement through configuration after thresholds are validated; support immediate rollback to observation
+    mode without reverting schema.
+
+  - Add throttled notifications for lock application, recovery, password change, MFA replacement, suspension/
+    restoration, deactivation/reactivation, and recovery-channel changes.
+
+  - Aggregate repeated lock notifications per account/window to prevent email flooding.
+  - Document Redis degradation, Turnstile outage handling, environment variables, recovery operations, notification
+    retries, monitoring queries, and incident response.
+
+  - Run backend unit/integration tests, PostgreSQL tenant-isolation tests, race detector, vet/static checks, frontend
+    tests, type checking, linting, and production builds.
+
+  - Validate migrations both upward and downward where safe; destructive rollback must refuse when it would discard
+    new active security state.
+
+  ### Phase 6 — Deferred Platform Recovery Plane
+
+  - Do not model platform administrators as tenant users or superuser roles.
+  - First define a separate platform identity boundary, strong MFA enforcement, platform:account_recovery permission,
+    privileged audit scope, and operational ownership.
+
+  - Then add initiation and completion APIs for short-lived recovery invitations. Platform staff can select permitted
+    recovery actions but cannot set passwords, retrieve secrets/codes, impersonate users, or mark authentication
+    successful.
+
+  - Require reason and external verification reference, notify the user and organization contacts, and record
+    initiation, rejection, expiry, and completion.
+
+  - Document a controlled operational escalation procedure until this phase exists. No direct database unlock/MFA
+    deletion should be presented as normal recovery.
+
+  - Dual approval remains a documented follow-up unless a complete approval workflow is designed and implemented.
+
+  ## Test Plan
+
+  Each phase includes unit, handler, PostgreSQL integration, authorization, RLS, and frontend tests. Required
+  scenarios include:
+
+  - Atomic threshold transitions, concurrent failures, window expiry, delay cap, repeated-lock cap, and independent
+    mechanism counters.
+
+  - Equivalent known/unknown-account responses and timing work; shared-IP and multi-user abuse behavior.
+  - Redis and Turnstile outage policies and observation/enforcement modes.
+  - Expired, reused, replaced, and over-attempted recovery tokens; atomic MFA replacement and recovery-code rotation.
+  - Recovery clearing only temporary restrictions and revoking sessions immediately.
+  - Suspension/deactivation invariants, cross-tenant denial, self-management denial, and last-admin concurrency
+    protection.
+
+  - Append-only database permissions, required events, notification retry behavior, and secret-redaction tests.
+  - Compatibility coverage for existing users, sessions, password reset links, reactivation links, TOTP, WebAuthn, and
+    recovery codes.
+
+  ## Confirmed Decisions and Assumptions
+    Phase 6.
+
+  - Both backend and frontend repositories are included.
+  - Cloudflare Turnstile is the production CAPTCHA provider.
+  - Lost-MFA self-service uses verified email alone, with the compensating controls described above.
+  - Security notifications use a transactional outbox and bounded retry worker.
+  - Strict enforcement follows an observation deployment.
+  - deactivated remains the project’s disabled-account state and is restorable through an administrator-initiated
+    reactivation invitation.
+
+  - Redis supplemental limiting fails open to PostgreSQL-backed core protections; durable account-state enforcement
+    never depends solely on Redis.
+
+  - No new hidden bypass, shared platform account, master password, support impersonation, or retrievable MFA
+    credential is introduced.
