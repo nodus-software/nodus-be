@@ -7,7 +7,7 @@ readonly HEALTH_URL="${2:?usage: deploy.sh IMAGE_REF HEALTH_URL}"
 readonly DEPLOY_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly COMPOSE_FILE="${DEPLOY_DIR}/compose.production.yml"
 readonly LOCK_FILE="${DEPLOY_DIR}/deploy.lock"
-readonly EXPECTED_IMAGE_PATTERN='^ghcr\.io/becaris/nodus-be@sha256:[0-9a-f]{64}$'
+readonly EXPECTED_IMAGE_PATTERN='^ghcr\.io/nodus-software/nodus-be@sha256:[0-9a-f]{64}$'
 
 if [[ ! "${IMAGE_REF}" =~ ${EXPECTED_IMAGE_PATTERN} ]]; then
   echo "refusing mutable or unexpected image reference: ${IMAGE_REF}" >&2
@@ -142,4 +142,4 @@ fi
 
 echo "deployment of ${IMAGE_REF} succeeded"
 docker image prune --all --force \
-  --filter 'label=org.opencontainers.image.source=https://github.com/Becaris/nodus-be' >/dev/null
+  --filter 'label=org.opencontainers.image.source=https://github.com/nodus-software/nodus-be' >/dev/null

@@ -2,7 +2,7 @@
 
 The current GitHub Actions pipeline validates every pull request to `main`. A
 successful push to `main` builds one `linux/amd64` image, publishes it to the
-private GitHub Container Registry package `ghcr.io/becaris/nodus-be`, and
+private GitHub Container Registry package `ghcr.io/nodus-software/nodus-be`, and
 records the immutable image reference in the workflow summary. It does not
 deploy staging or production. The server deployment assets and the setup notes
 below are retained for when server-based deployment is enabled again.
@@ -168,7 +168,7 @@ staging and production deployment jobs before using it.
 After the automatic staging deployment succeeds:
 
 1. Open the completed **CI/CD** workflow run and copy the
-   `ghcr.io/becaris/nodus-be@sha256:...` value from its summary.
+   `ghcr.io/nodus-software/nodus-be@sha256:...` value from its summary.
 2. Verify staging behavior and compatibility.
 3. Open **Actions → CI/CD → Run workflow**, keep the branch set to `main`, paste
    the immutable value into `image_ref`, and run the workflow.
@@ -180,7 +180,7 @@ image names outside this repository.
 ## Deployment and recovery behavior
 
 The remote script serializes deployments with `flock`, accepts only an
-immutable `ghcr.io/becaris/nodus-be@sha256:...` reference, and performs this
+immutable `ghcr.io/nodus-software/nodus-be@sha256:...` reference, and performs this
 sequence:
 
 1. Pull the image and record the currently running image.
@@ -199,7 +199,7 @@ Inspect a failed deployment on the host with:
 
 ```sh
 cd /opt/nodus
-export IMAGE_REF=ghcr.io/becaris/nodus-be@sha256:THE_FAILED_DIGEST
+export IMAGE_REF=ghcr.io/nodus-sofware/nodus-be@sha256:THE_FAILED_DIGEST
 docker compose -f compose.production.yml ps
 docker logs --tail 200 nodus-alloy
 docker exec nodus-api tail -n 200 /app/logs/app.log
@@ -231,7 +231,7 @@ from the GitHub deployment history or GHCR and run:
 
 ```sh
 cd /opt/nodus
-IMAGE_REF=ghcr.io/becaris/nodus-be@sha256:THE_PREVIOUS_DIGEST \
+IMAGE_REF=ghcr.io/nodus-software/nodus-be@sha256:THE_PREVIOUS_DIGEST \
   docker compose -f compose.production.yml up -d --no-deps --force-recreate api
 ```
 

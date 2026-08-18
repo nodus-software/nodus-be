@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: ghcr.io/becaris/nodus-be
+  IMAGE_NAME: ghcr.io/nodus-software/nodus-be
 
 jobs:
   quality:
@@ -84,7 +84,7 @@ jobs:
             grafana/alloy:v1.18.0 validate --stability.level=experimental /etc/alloy/config.alloy
           install -m 600 /dev/null deploy/.env
           install -m 600 /dev/null deploy/alloy.env
-          IMAGE_REF=ghcr.io/becaris/nodus-be@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+          IMAGE_REF=ghcr.io/nodus-software/nodus-be@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             MIGRATION_DB_URL=postgres://ci:ci@db:5432/ci \
             docker compose -f deploy/compose.production.yml config --quiet
           rm deploy/.env deploy/alloy.env
@@ -139,7 +139,7 @@ jobs:
             ${{ env.IMAGE_NAME }}:main
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           labels: |
-            org.opencontainers.image.source=https://github.com/Becaris/nodus-be
+            org.opencontainers.image.source=https://github.com/nodus-software/nodus-be
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=min
