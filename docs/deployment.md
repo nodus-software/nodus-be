@@ -77,6 +77,43 @@ migration role must be able to create and alter the schema and install the
 by the application. Both agreed databases are empty, so the first deployment
 will apply migrations 1 through 12 and create `schema_migrations`.
 
+## Grafana Cloud Logs
+
+Create `/opt/nodus/alloy.env` independently on each host, owned by the
+deployment user and set to mode `0600`. Keep it separate from `.env` so the API
+container never receives the Grafana Cloud credential:
+
+```dotenv
+LOKI_URL=https://logs-prod-xxx.grafana.net/loki/api/v1/push
+LOKI_USERNAME=replace-with-the-logs-tenant-id
+GRAFANA_CLOUD_API_KEY=replace-with-a-log-write-only-access-policy-token
+LOKI_ENVIRONMENT=production
+LOKI_INSTANCE=prod-api-01
+```
+
+Use `LOKI_ENVIRONMENT=staging` and a distinct stable instance name on the
+staging host. Copy the Loki URL and tenant ID from the **Send logs** details for
+the Grafana Cloud stack. Create an access policy token with log ingestion
+permission only.
+
+The API continues writing JSON to `/app/logs/app.log`, backed by the
+`nodus_logs` volume. Grafana Alloy mounts that volume read-only, extracts the
+record timestamp and level, and sends the complete JSON line to Loki. Alloy's
+positions and delivery state are persisted in `alloy_data`, allowing collection
+to resume after a restart without replaying the complete file.
+
+The pinned Alloy release runs its experimental Loki write-ahead log so accepted
+records survive collector restarts while delivery is pending. Keep the image
+version pinned and validate the configuration before upgrading Alloy because
+Grafana may change experimental WAL behavior between releases.
+
+Lumberjack creates `app.log` with owner-only permissions. Alloy therefore runs
+as root inside its container solely to read that file. The collector has no
+Docker socket or host filesystem access, its log and configuration mounts are
+read-only, all Linux capabilities except the read-only `DAC_READ_SEARCH`
+permission are dropped, privilege escalation is disabled, and no Alloy port is
+exposed by the host.
+
 ## GitHub repository configuration
 
 GitHub Free does not make deployment environments, environment secrets, or
@@ -145,10 +182,11 @@ immutable `ghcr.io/becaris/nodus-be@sha256:...` reference, and performs this
 sequence:
 
 1. Pull the image and record the currently running image.
-2. Run all pending embedded migrations as a one-off container.
-3. Recreate the API and wait for its Docker health check.
-4. Verify the public HTTPS health URL.
-5. Remove only unused images carrying this repository's OCI source label.
+2. Pull Alloy, validate its configuration, and verify the collector starts.
+3. Run all pending embedded migrations as a one-off container.
+4. Recreate the API and wait for its Docker health check.
+5. Verify the public HTTPS health URL.
+6. Remove only unused images carrying this repository's OCI source label.
 
 If migration fails, the running API is untouched. If the new API fails health
 verification, the script recreates the previous application image. It never
@@ -159,9 +197,31 @@ Inspect a failed deployment on the host with:
 
 ```sh
 cd /opt/nodus
-IMAGE_REF=ghcr.io/becaris/nodus-be@sha256:THE_FAILED_DIGEST \
-  docker compose -f compose.production.yml ps
-docker logs --tail 200 nodus-api
+export IMAGE_REF=ghcr.io/becaris/nodus-be@sha256:THE_FAILED_DIGEST
+docker compose -f compose.production.yml ps
+docker logs --tail 200 nodus-alloy
+docker exec nodus-api tail -n 200 /app/logs/app.log
+```
+
+Normal application records are written to `app.log`, not the API container's
+stdout, so `docker logs nodus-api` does not show them. In Grafana Cloud, open
+**Explore**, select the Loki data source, and begin with:
+
+```logql
+{service_name="nodus-api", environment="production"}
+```
+
+Filter errors with:
+
+```logql
+{service_name="nodus-api", environment="production", level="ERROR"}
+```
+
+If records do not arrive, inspect `docker logs nodus-alloy` for authentication
+or delivery errors and confirm the source file is visible with:
+
+```sh
+docker exec nodus-alloy ls -l /var/log/nodus/app.log
 ```
 
 For an intentional application-only rollback, recover the previous digest

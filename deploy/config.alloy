@@ -1,0 +1,58 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+loki.source.file "nodus_api" {
+  targets = [
+    {
+      "__path__"     = "/var/log/nodus/app.log",
+      "service_name" = "nodus-api",
+      "environment"  = sys.env("LOKI_ENVIRONMENT"),
+      "instance"     = sys.env("LOKI_INSTANCE"),
+    },
+  ]
+  forward_to = [loki.process.nodus_api.receiver]
+
+  file_match {
+    enabled = true
+  }
+}
+
+loki.process "nodus_api" {
+  forward_to = [loki.write.grafana_cloud.receiver]
+
+  stage.json {
+    expressions = {
+      level     = "level",
+      timestamp = "time",
+    }
+  }
+
+  stage.timestamp {
+    source            = "timestamp"
+    format            = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+
+  stage.labels {
+    values = {
+      level = "level",
+    }
+  }
+}
+
+loki.write "grafana_cloud" {
+  endpoint {
+    url = sys.env("LOKI_URL")
+
+    basic_auth {
+      username = sys.env("LOKI_USERNAME")
+      password = sys.env("GRAFANA_CLOUD_API_KEY")
+    }
+  }
+
+  wal {
+    enabled = true
+  }
+}

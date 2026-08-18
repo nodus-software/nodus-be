@@ -24,6 +24,11 @@ if [[ ! -f "${DEPLOY_DIR}/.env" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${DEPLOY_DIR}/alloy.env" ]]; then
+  echo "missing host-managed Alloy environment file: ${DEPLOY_DIR}/alloy.env" >&2
+  exit 1
+fi
+
 exec 9>"${LOCK_FILE}"
 if ! flock -n 9; then
   echo "another deployment is already running" >&2
@@ -64,6 +69,31 @@ wait_for_container() {
   return 1
 }
 
+wait_for_alloy() {
+  local attempts=10
+  local attempt
+  local container_id
+  local status
+  container_id="$("${compose[@]}" ps --quiet alloy)"
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    status="$(docker inspect --format '{{.State.Status}}' "${container_id}" 2>/dev/null || true)"
+    case "${status}" in
+      running)
+        return 0
+        ;;
+      exited|dead)
+        docker logs --tail 100 "${container_id}" >&2 || true
+        return 1
+        ;;
+    esac
+    sleep 1
+  done
+
+  docker logs --tail 100 "${container_id}" >&2 || true
+  return 1
+}
+
 rollback() {
   if [[ -z "${previous_ref}" || "${previous_ref}" == "${IMAGE_REF}" ]]; then
     echo "no previous application image is available for rollback" >&2
@@ -78,6 +108,19 @@ rollback() {
 
 echo "pulling ${IMAGE_REF}"
 docker pull "${IMAGE_REF}"
+
+echo "pulling Grafana Alloy"
+"${compose[@]}" pull alloy
+
+echo "validating Grafana Alloy configuration"
+"${compose[@]}" run --rm --no-deps alloy validate --stability.level=experimental /etc/alloy/config.alloy
+
+echo "starting Grafana Alloy"
+"${compose[@]}" up --detach --no-deps --force-recreate alloy
+if ! wait_for_alloy; then
+  echo "deployment failed Grafana Alloy startup verification" >&2
+  exit 1
+fi
 
 echo "applying database migrations"
 "${compose[@]}" --profile tools run --rm migrate

@@ -222,8 +222,11 @@ static/docs/               API documentation
 deploy/                    production Compose and deployment scripts
 ```
 
-Application logs are written to `logs/app.log` and rotated locally. Air writes
-its temporary build output under `tmp/`. Both directories are ignored by Git.
+Application logs are written to `logs/app.log` and rotated locally. Production
+mounts the same log directory in Grafana Alloy and forwards the structured JSON
+records to Grafana Cloud Loki; see [the deployment guide](docs/deployment.md#grafana-cloud-logs).
+Air writes its temporary build output under `tmp/`. Both directories are
+ignored by Git.
 
 ## Troubleshooting
 
