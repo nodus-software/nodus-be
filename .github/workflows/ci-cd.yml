@@ -107,8 +107,9 @@ jobs:
         shell: bash
         run: |
           go run ./cmd/migrate
-          version="$(psql --host 127.0.0.1 --username nodus --dbname nodus_ci --tuples-only --no-align --command 'SELECT version FROM schema_migrations')"
-          test "${version}" = "23"
+          expected_version="$(find migrations -maxdepth 1 -name '*.up.sql' -printf '%f\n' | sort --version-sort | tail -n 1 | cut -d_ -f1 | sed 's/^0*//')"
+          migration_state="$(psql --host 127.0.0.1 --username nodus --dbname nodus_ci --tuples-only --no-align --field-separator=: --command 'SELECT version, dirty FROM schema_migrations')"
+          test "${migration_state}" = "${expected_version}:f"
 
   package:
     name: Publish image
@@ -150,7 +151,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/Becaris/nodus-be
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
           provenance: true
           sbom: true
 
