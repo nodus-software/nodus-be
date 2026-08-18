@@ -199,7 +199,7 @@ Inspect a failed deployment on the host with:
 
 ```sh
 cd /opt/nodus
-export IMAGE_REF=ghcr.io/nodus-sofware/nodus-be@sha256:THE_FAILED_DIGEST
+export IMAGE_REF=ghcr.io/nodus-software/nodus-be@sha256:THE_FAILED_DIGEST
 docker compose -f compose.production.yml ps
 docker logs --tail 200 nodus-alloy
 docker exec nodus-api tail -n 200 /app/logs/app.log

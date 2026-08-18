@@ -27,7 +27,7 @@ global installations.
 Clone the repository and enter it:
 
 ```sh
-git clone git@github.com:Becaris/nodus-be.git
+git clone git@github.com:nodus-software/nodus-be.git
 cd nodus-be
 ```
 
