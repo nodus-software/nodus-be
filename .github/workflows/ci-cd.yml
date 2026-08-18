@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI
 
 on:
   pull_request:
@@ -6,11 +6,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      image_ref:
-        description: "Immutable staged image (ghcr.io/becaris/nodus-be@sha256:...)"
-        required: true
-        type: string
 
 concurrency:
   group: ci-cd-${{ github.workflow }}-${{ github.ref }}
@@ -25,7 +20,6 @@ env:
 jobs:
   quality:
     name: Quality gate
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -120,9 +114,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      image_ref: ${{ steps.image.outputs.image_ref }}
-
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -155,120 +146,8 @@ jobs:
           provenance: true
           sbom: true
 
-      - name: Export immutable image reference
-        id: image
-        shell: bash
-        run: echo "image_ref=${IMAGE_NAME}@${{ steps.build.outputs.digest }}" >> "${GITHUB_OUTPUT}"
-
-  deploy_staging:
-    name: Deploy staging
-    needs: package
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: deploy-staging
-      cancel-in-progress: false
-
-    steps:
-      - name: Check out deployment assets
-        uses: actions/checkout@v7
-
-      - name: Configure SSH
+      - name: Record published image
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ vars.STAGING_SSH_KNOWN_HOSTS }}
+          IMAGE_REF: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
         shell: bash
-        run: |
-          install -m 700 -d "${HOME}/.ssh"
-          install -m 600 /dev/null "${HOME}/.ssh/deploy_key"
-          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/deploy_key"
-          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
-
-      - name: Upload deployment assets
-        env:
-          DEPLOY_HOST: ${{ vars.STAGING_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.STAGING_DEPLOY_USER }}
-          DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH }}
-        shell: bash
-        run: |
-          target="${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
-          printf -v prepare_command 'install -d -m 750 %q' "${DEPLOY_PATH}"
-          ssh "${ssh_args[@]}" "${target}" "${prepare_command}"
-          scp "${ssh_args[@]}" deploy/compose.production.yml deploy/config.alloy deploy/deploy.sh "${target}:${DEPLOY_PATH}/"
-          printf -v mode_command 'chmod 0755 %q/deploy.sh' "${DEPLOY_PATH}"
-          ssh "${ssh_args[@]}" "${target}" "${mode_command}"
-
-      - name: Deploy immutable image
-        env:
-          DEPLOY_HOST: ${{ vars.STAGING_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.STAGING_DEPLOY_USER }}
-          DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH }}
-          HEALTH_URL: ${{ vars.STAGING_HEALTH_URL }}
-          IMAGE_REF: ${{ needs.package.outputs.image_ref }}
-        shell: bash
-        run: |
-          target="${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
-          printf -v deploy_command 'cd %q && ./deploy.sh %q %q' "${DEPLOY_PATH}" "${IMAGE_REF}" "${HEALTH_URL}"
-          ssh "${ssh_args[@]}" "${target}" "${deploy_command}"
-
-      - name: Record staged image
-        env:
-          IMAGE_REF: ${{ needs.package.outputs.image_ref }}
-        shell: bash
-        run: |
-          printf '## Staging deployment\n\nProduction image: `%s`\n' "${IMAGE_REF}" >> "${GITHUB_STEP_SUMMARY}"
-
-  deploy_production:
-    name: Deploy production
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-
-    steps:
-      - name: Check out deployment assets
-        uses: actions/checkout@v7
-
-      - name: Configure SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ vars.PRODUCTION_SSH_KNOWN_HOSTS }}
-        shell: bash
-        run: |
-          install -m 700 -d "${HOME}/.ssh"
-          install -m 600 /dev/null "${HOME}/.ssh/deploy_key"
-          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/deploy_key"
-          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
-
-      - name: Upload deployment assets
-        env:
-          DEPLOY_HOST: ${{ vars.PRODUCTION_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.PRODUCTION_DEPLOY_USER }}
-          DEPLOY_PATH: ${{ vars.PRODUCTION_DEPLOY_PATH }}
-        shell: bash
-        run: |
-          target="${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
-          printf -v prepare_command 'install -d -m 750 %q' "${DEPLOY_PATH}"
-          ssh "${ssh_args[@]}" "${target}" "${prepare_command}"
-          scp "${ssh_args[@]}" deploy/compose.production.yml deploy/config.alloy deploy/deploy.sh "${target}:${DEPLOY_PATH}/"
-          printf -v mode_command 'chmod 0755 %q/deploy.sh' "${DEPLOY_PATH}"
-          ssh "${ssh_args[@]}" "${target}" "${mode_command}"
-
-      - name: Deploy immutable image
-        env:
-          DEPLOY_HOST: ${{ vars.PRODUCTION_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.PRODUCTION_DEPLOY_USER }}
-          DEPLOY_PATH: ${{ vars.PRODUCTION_DEPLOY_PATH }}
-          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL }}
-          IMAGE_REF: ${{ inputs.image_ref }}
-        shell: bash
-        run: |
-          target="${DEPLOY_USER}@${DEPLOY_HOST}"
-          ssh_args=(-i "${HOME}/.ssh/deploy_key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
-          printf -v deploy_command 'cd %q && ./deploy.sh %q %q' "${DEPLOY_PATH}" "${IMAGE_REF}" "${HEALTH_URL}"
-          ssh "${ssh_args[@]}" "${target}" "${deploy_command}"
+        run: printf '## Published image\n\n`%s`\n' "${IMAGE_REF}" >> "${GITHUB_STEP_SUMMARY}"

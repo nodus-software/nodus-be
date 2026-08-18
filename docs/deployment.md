@@ -1,12 +1,11 @@
 # Nodus API deployment
 
-The GitHub Actions pipeline validates every pull request to `main`. A successful
-push to `main` builds one `linux/amd64` image, publishes it to the private GitHub
-Container Registry package `ghcr.io/becaris/nodus-be`, deploys that digest to
-staging, and records the immutable digest in the workflow summary. Production
-is deployed separately by manually running the workflow with that staged
-digest. This design works with GitHub Free for a private repository and does not
-depend on paid deployment environments or required-reviewer rules.
+The current GitHub Actions pipeline validates every pull request to `main`. A
+successful push to `main` builds one `linux/amd64` image, publishes it to the
+private GitHub Container Registry package `ghcr.io/becaris/nodus-be`, and
+records the immutable image reference in the workflow summary. It does not
+deploy staging or production. The server deployment assets and the setup notes
+below are retained for when server-based deployment is enabled again.
 
 ## One-time host preparation
 
@@ -114,7 +113,7 @@ read-only, all Linux capabilities except the read-only `DAC_READ_SEARCH`
 permission are dropped, privilege escalation is disabled, and no Alloy port is
 exposed by the host.
 
-## GitHub repository configuration
+## Future GitHub repository configuration
 
 GitHub Free does not make deployment environments, environment secrets, or
 required deployment reviewers available to private repositories. Store the
@@ -162,6 +161,9 @@ perform the final production deployment manually from a secured administrator
 machine instead.
 
 ## Promoting staging to production
+
+This promotion flow is not active in the current CI workflow. Restore the
+staging and production deployment jobs before using it.
 
 After the automatic staging deployment succeeds:
 
