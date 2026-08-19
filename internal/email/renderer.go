@@ -21,6 +21,7 @@ const (
 	StaffInvitation        Kind = "staff_invitation"
 	PasswordResetRequested Kind = "password_reset_requested"
 	AccountReactivation    Kind = "account_reactivation"
+	SecurityNotification   Kind = "security_notification"
 )
 
 type CommonData struct {

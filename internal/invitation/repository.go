@@ -3,6 +3,8 @@ package invitation
 import (
 	"context"
 	"time"
+
+	"nodus-health/internal/email"
 )
 
 // Repository persists everything the Invitation domain owns: the pending
@@ -34,14 +36,9 @@ type Repository interface {
 	ResetMFABackupCodesByUser(ctx context.Context, userID string) error
 	ActivateReactivatedUser(ctx context.Context, userID, passwordHash string, reviewedAt, nextReview time.Time) error
 	DeletePendingUser(ctx context.Context, userID string) error
+	QueueEmail(ctx context.Context, message email.Message) error
 
 	// WithinTx runs fn with a Repository bound to a single database
 	// transaction, committing on nil and rolling back otherwise.
 	WithinTx(ctx context.Context, fn func(Repository) error) error
-}
-
-// Mailer delivers multipart invitation messages while keeping the service
-// independent of the concrete SMTP implementation.
-type Mailer interface {
-	SendHTML(ctx context.Context, to, subject, textBody, htmlBody string) error
 }

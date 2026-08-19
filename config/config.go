@@ -98,11 +98,15 @@ type Config struct {
 	PasswordResetMaxPerIPPerHour       int
 
 	// Email
-	SmtpHost     string
-	SmtpPort     string
-	SmtpSender   string
-	SmtpPassword string
-	EmailLogoURL string
+	EmailProvider      string
+	EmailFromName      string
+	EmailFromAddress   string
+	EmailHTTPTimeout   time.Duration
+	ZeptoMailAPIURL    string
+	ZeptoMailSendToken string
+	ResendAPIURL       string
+	ResendAPIKey       string
+	EmailLogoURL       string
 }
 
 // Load reads from a .env file if present, then falls back to system env vars.
@@ -195,10 +199,15 @@ func Load() (*Config, error) {
 		PasswordResetMaxPerUsernamePerHour: 5,
 		PasswordResetMaxPerIPPerHour:       20,
 
-		SmtpHost:     getEnv("SMTP_HOST", ""),
-		SmtpPort:     getEnv("SMTP_PORT", ""),
-		SmtpSender:   getEnv("SMTP_SENDER", ""),
-		SmtpPassword: getEnv("SMTP_PASSWORD", ""),
+		EmailProvider:      getEnv("EMAIL_PROVIDER", ""),
+		EmailFromName:      getEnv("EMAIL_FROM_NAME", "Nodus Health"),
+		EmailFromAddress:   getEnv("EMAIL_FROM_ADDRESS", ""),
+		EmailHTTPTimeout:   getEnvDuration("EMAIL_HTTP_TIMEOUT", 10*time.Second),
+		ZeptoMailAPIURL:    getEnv("ZEPTOMAIL_API_URL", "https://api.zeptomail.com/v1.1/email"),
+		ZeptoMailSendToken: getEnv("ZEPTOMAIL_SEND_TOKEN", ""),
+		ResendAPIURL:       getEnv("RESEND_API_URL", "https://api.resend.com/emails"),
+		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
+
 		EmailLogoURL: getEnv("EMAIL_LOGO_URL", ""),
 	}
 

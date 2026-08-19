@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"time"
+
+	"nodus-health/internal/email"
 )
 
 // Repository persists everything the Auth domain owns: users' credentials
@@ -46,6 +48,7 @@ type Repository interface {
 	RecordPasswordResetAttempt(ctx context.Context, id, usernameAttempted, ip string) error
 	CountPasswordResetAttemptsByUsername(ctx context.Context, username string, since time.Time) (int, error)
 	CountPasswordResetAttemptsByIP(ctx context.Context, ip string, since time.Time) (int, error)
+	QueueEmail(ctx context.Context, message email.Message) error
 
 	CreateMFAFactor(ctx context.Context, factor MFAFactor) (*MFAFactor, error)
 	GetMFAFactorByID(ctx context.Context, id string) (*MFAFactor, error)

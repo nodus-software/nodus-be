@@ -88,8 +88,9 @@ func Setup(t *testing.T) *Env {
 	t.Helper()
 	repo := newMemoryRepo()
 	mailer := &memoryMailer{}
+	repo.mailer = mailer
 	renderer := email.NewRenderer(email.CommonData{AppName: "Nodus Health", AppURL: "https://app.test"})
-	service := invitation.NewService(repo, discardAudit{}, mailer, renderer, logger.NewLogger(), invitation.Config{
+	service := invitation.NewService(repo, discardAudit{}, renderer, logger.NewLogger(), invitation.Config{
 		BaseURL: "https://app.test", InviteTokenTTL: 24 * time.Hour, EnrollmentTokenTTL: 30 * time.Minute,
 		BcryptCost: 4, OrganizationName: "Nodus Test", AccessReviewCycle: 90 * 24 * time.Hour,
 		PasswordPolicy: auth.PasswordPolicy{MinLength: 12, RequireUppercase: true, RequireNumber: true, RequireSymbol: true},
@@ -169,6 +170,7 @@ func Decode(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 // memoryRepo is a complete, deliberately small Repository implementation
 // giving handler tests deterministic isolated state.
 type memoryRepo struct {
+	mailer *memoryMailer
 	sync.Mutex
 	users              map[string]invitation.PendingUser // by ID
 	usersByMail        map[string]string                 // email -> userID
@@ -380,6 +382,11 @@ func (r *memoryRepo) DeletePendingUser(_ context.Context, userID string) error {
 	delete(r.usersByMail, u.Email)
 	delete(r.users, userID)
 	delete(r.userRoles, userID)
+	return nil
+}
+
+func (r *memoryRepo) QueueEmail(_ context.Context, message email.Message) error {
+	r.mailer.SendHTML(context.Background(), message.To, message.Subject, message.Text, message.HTML)
 	return nil
 }
 

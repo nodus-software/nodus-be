@@ -16,6 +16,7 @@ import (
 	"github.com/pquerna/otp/totp"
 
 	"nodus-health/internal/audit"
+	"nodus-health/internal/email"
 	"nodus-health/internal/tenant"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
@@ -89,14 +90,14 @@ func (s *Service) tenantFrontendURL(ctx context.Context, path string) string {
 type Service struct {
 	repo        Repository
 	audit       AuditRecorder
-	mailer      Mailer
+	email       *email.Renderer
 	log         *logger.Logger
 	cfg         Config
 	webauthn    *wa.WebAuthn
 	webauthnErr error
 }
 
-func NewService(repo Repository, audit AuditRecorder, mailer Mailer, log *logger.Logger, cfg Config) *Service {
+func NewService(repo Repository, audit AuditRecorder, renderer *email.Renderer, log *logger.Logger, cfg Config) *Service {
 	if cfg.WebAuthnRPDisplayName == "" {
 		cfg.WebAuthnRPDisplayName = "Nodus Health"
 	}
@@ -110,7 +111,7 @@ func NewService(repo Repository, audit AuditRecorder, mailer Mailer, log *logger
 		cfg.WebAuthnCeremonyTTL = 5 * time.Minute
 	}
 	w, werr := wa.New(&wa.Config{RPDisplayName: cfg.WebAuthnRPDisplayName, RPID: cfg.WebAuthnRPID, RPOrigins: cfg.WebAuthnOrigins, AttestationPreference: protocol.PreferNoAttestation, AuthenticatorSelection: protocol.AuthenticatorSelection{ResidentKey: protocol.ResidentKeyRequirementPreferred, UserVerification: protocol.VerificationRequired}})
-	return &Service{repo: repo, audit: audit, mailer: mailer, log: log, cfg: cfg, webauthn: w, webauthnErr: werr}
+	return &Service{repo: repo, audit: audit, email: renderer, log: log, cfg: cfg, webauthn: w, webauthnErr: werr}
 }
 
 // dummyPasswordHash is compared against on a not-found username so that
@@ -716,6 +717,10 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, userID string, re
 		return nil, ErrCurrentPasswordInvalid
 	}
 	resp := &RecoveryCodesResponse{Remaining: s.cfg.MFABackupCodeCount}
+	var tenantID *string
+	if id, tenantErr := tenant.ID(ctx); tenantErr == nil {
+		tenantID = &id
+	}
 	err = s.repo.WithinTx(ctx, func(repo Repository) error {
 		if err := repo.InvalidateMFABackupCodes(ctx, userID); err != nil {
 			return err
@@ -734,15 +739,14 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, userID string, re
 			}
 			resp.RecoveryCodes = append(resp.RecoveryCodes, raw)
 		}
-		return nil
+		body := "Your MFA recovery codes were replaced. If this was not you, contact your administrator immediately."
+		return repo.QueueEmail(ctx, email.Message{TenantID: tenantID, Kind: email.SecurityNotification, To: user.Email,
+			Subject: "Your Nodus Health recovery codes were replaced", Text: body, HTML: "<p>" + body + "</p>"})
 	})
 	if err != nil {
 		return nil, err
 	}
 	_ = s.audit.Record(ctx, audit.Entry{UserID: &userID, Action: "mfa_recovery_codes_regenerated", Result: audit.ResultSuccess})
-	if err := s.mailer.Send(ctx, user.Email, "Your Nodus Health recovery codes were replaced", "Your MFA recovery codes were replaced. If this was not you, contact your administrator immediately."); err != nil {
-		s.log.Error("failed recovery-code notification", "error", err.Error())
-	}
 	return resp, nil
 }
 
@@ -842,18 +846,27 @@ func (s *Service) RequestPasswordReset(ctx context.Context, req RequestPasswordR
 	if err != nil {
 		return err
 	}
-	if err := s.repo.CreatePasswordResetToken(ctx, PasswordResetToken{
-		ID: tokenID, UserID: user.ID, TokenHash: security.HashToken(rawToken),
-		ExpiresAt: now.Add(s.cfg.PasswordResetTokenTTL),
-	}); err != nil {
-		return err
-	}
-
 	resetLink := s.tenantFrontendURL(ctx, "/reset-password?token="+url.QueryEscape(rawToken))
-	if err := s.mailer.Send(ctx, user.Email, "Reset your Nodus Health password", resetLink); err != nil {
-		s.log.Error("failed to send password reset email", "error", err.Error())
+	expiresAt := now.Add(s.cfg.PasswordResetTokenTTL)
+	rendered, err := s.email.RenderPasswordReset(email.PasswordResetData{
+		CommonData: email.CommonData{RecipientName: user.FullName}, ResetURL: resetLink, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		return fmt.Errorf("render password reset email: %w", err)
 	}
-	return nil
+	var tenantID *string
+	if id, tenantErr := tenant.ID(ctx); tenantErr == nil {
+		tenantID = &id
+	}
+	return s.repo.WithinTx(ctx, func(repo Repository) error {
+		if err := repo.CreatePasswordResetToken(ctx, PasswordResetToken{
+			ID: tokenID, UserID: user.ID, TokenHash: security.HashToken(rawToken), ExpiresAt: expiresAt,
+		}); err != nil {
+			return err
+		}
+		return repo.QueueEmail(ctx, email.Message{TenantID: tenantID, Kind: email.PasswordResetRequested, To: user.Email,
+			Subject: rendered.Subject, Text: rendered.Text, HTML: rendered.HTML, ExpiresAt: &expiresAt})
+	})
 }
 
 // ConfirmPasswordReset completes a reset using the out-of-band token. The

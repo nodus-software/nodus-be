@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"nodus-health/config"
@@ -60,12 +61,24 @@ func main() {
 	auditService := audit.NewService(auditRepo)
 
 	authRepo := authpg.New(pool)
-	mailer := &auth.SMTPMailer{
-		Host: cfg.SmtpHost, Port: cfg.SmtpPort, Sender: cfg.SmtpSender, Password: cfg.SmtpPassword,
-	}
 	emailRenderer := email.NewRenderer(email.CommonData{
 		AppName: "Nodus Health", AppURL: cfg.BaseUrl, LogoURL: cfg.EmailLogoURL,
 	})
+	if cfg.AppEnv == "production" && strings.TrimSpace(cfg.EmailProvider) == "" {
+		log.Fatal("EMAIL_PROVIDER is required in production")
+	}
+	if strings.TrimSpace(cfg.EmailProvider) != "" {
+		provider, err := email.NewProvider(email.ProviderConfig{
+			Name: cfg.EmailProvider, FromName: cfg.EmailFromName, FromAddress: cfg.EmailFromAddress,
+			ZeptoURL: cfg.ZeptoMailAPIURL, ZeptoToken: cfg.ZeptoMailSendToken,
+			ResendURL: cfg.ResendAPIURL, ResendAPIKey: cfg.ResendAPIKey,
+			HTTPClient: &http.Client{Timeout: cfg.EmailHTTPTimeout},
+		})
+		if err != nil {
+			log.Fatal("invalid email provider configuration", "error", err.Error())
+		}
+		go email.NewWorker(pool, provider, log).Run(ctx)
+	}
 
 	authCfg := auth.Config{
 		BaseURL:          cfg.BaseUrl,
@@ -106,7 +119,7 @@ func main() {
 		},
 	}
 
-	authService := auth.NewService(authRepo, auditService, mailer, log, authCfg)
+	authService := auth.NewService(authRepo, auditService, emailRenderer, log, authCfg)
 	sameSite := http.SameSiteLaxMode
 	switch cfg.RefreshCookieSameSite {
 	case "strict":
@@ -132,7 +145,7 @@ func main() {
 	usersHandler := users.NewHandler(usersService, authService, cfg.JWTSecret, log)
 
 	invitationRepo := invitationpg.New(pool)
-	invitationService := invitation.NewService(invitationRepo, auditService, mailer, emailRenderer, log, invitation.Config{
+	invitationService := invitation.NewService(invitationRepo, auditService, emailRenderer, log, invitation.Config{
 		BaseURL:            cfg.BaseUrl,
 		TenantBaseDomain:   cfg.TenantBaseDomain,
 		TenantURLScheme:    cfg.TenantURLScheme,
@@ -157,7 +170,7 @@ func main() {
 	clinicalHandler := clinical.NewHandler(clinicalService, authService, cfg.JWTSecret, log)
 
 	organizationService := organizations.NewService(
-		pool, mailer, emailRenderer, organizations.Config{
+		pool, emailRenderer, organizations.Config{
 			BaseURL: cfg.BaseUrl, TenantBaseDomain: cfg.TenantBaseDomain, TenantURLScheme: cfg.TenantURLScheme, TenantURLPort: cfg.TenantURLPort,
 			ReservedSlugs: cfg.ReservedOrganizationSlugs, BcryptCost: cfg.BcryptCost, PasswordPolicy: authCfg.PasswordPolicy,
 		}, log,

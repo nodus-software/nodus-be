@@ -136,7 +136,7 @@ func TestPostgresTriageDefaultsStartAndRouting(t *testing.T) {
 	}
 	pool.Close()
 
-	migrateDatabase(t, dsn, 22)
+	migrateDatabase(t, dsn, 25)
 	runtimeDSN := runtimeDatabase(t, dsn)
 	pool, err = pgxpool.New(ctx, runtimeDSN)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestPostgresTriageDefaultsStartAndRouting(t *testing.T) {
 	assertTenantDefaults(t, pool, legacyTenantID)
 
 	organizationService := organizations.NewService(
-		pool, stubMailer{}, email.NewRenderer(email.CommonData{}), organizations.Config{
+		pool, email.NewRenderer(email.CommonData{}), organizations.Config{
 			BaseURL: "http://localhost", TenantBaseDomain: "localhost", TenantURLScheme: "http",
 			BcryptCost: 4, PasswordPolicy: auth.PasswordPolicy{},
 		}, logger.NewLogger(),

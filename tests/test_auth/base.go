@@ -15,6 +15,7 @@ import (
 
 	"nodus-health/internal/audit"
 	"nodus-health/internal/auth"
+	"nodus-health/internal/email"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
 	"nodus-health/pkg/utility"
@@ -53,7 +54,11 @@ func (m *memoryMailer) LastToken() string {
 	if len(parts) != 2 {
 		return ""
 	}
-	return parts[1]
+	fields := strings.Fields(parts[1])
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.SplitN(fields[0], "&", 2)[0]
 }
 
 type discardAudit struct{}
@@ -67,7 +72,9 @@ func Setup(t *testing.T) *Env {
 	copy(encryptionKey[:], "test-only-mfa-encryption-key-32!")
 	repo := newMemoryRepo()
 	mailer := &memoryMailer{}
-	service := auth.NewService(repo, discardAudit{}, mailer, logger.NewLogger(), auth.Config{
+	repo.mailer = mailer
+	renderer := email.NewRenderer(email.CommonData{AppName: "Nodus Health", AppURL: cfg.BaseUrl})
+	service := auth.NewService(repo, discardAudit{}, renderer, logger.NewLogger(), auth.Config{
 		BaseURL: cfg.BaseUrl, JWTSecret: "test-jwt-secret", AccessTokenTTL: time.Hour,
 		RefreshTokenTTL: 24 * time.Hour, SessionRefreshTokenTTL: 2 * time.Hour, ChallengeTokenTTL: 5 * time.Minute,
 		PasswordResetTokenTTL: time.Hour, BcryptCost: 4, TOTPIssuer: "Nodus Test",
@@ -248,6 +255,7 @@ type enrollmentToken struct {
 	consumed         bool
 }
 type memoryRepo struct {
+	mailer *memoryMailer
 	sync.Mutex
 	users               map[string]auth.User
 	challenges          map[string]auth.LoginChallenge
@@ -683,5 +691,9 @@ func (r *memoryRepo) GetRolesByUser(_ context.Context, uid string) ([]auth.Role,
 }
 func (r *memoryRepo) GetEffectivePermissionsByUser(_ context.Context, uid string) ([]string, error) {
 	return r.permissions[uid], nil
+}
+func (r *memoryRepo) QueueEmail(_ context.Context, message email.Message) error {
+	r.mailer.Sent = append(r.mailer.Sent, sentMail{To: message.To, Subject: message.Subject, Body: message.Text})
+	return nil
 }
 func (r *memoryRepo) WithinTx(_ context.Context, fn func(auth.Repository) error) error { return fn(r) }

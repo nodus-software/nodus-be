@@ -52,19 +52,18 @@ func (s *Service) tenantURL(identity tenant.Identity, path string) string {
 }
 
 type Service struct {
-	repo   Repository
-	audit  AuditRecorder
-	mailer Mailer
-	email  *email.Renderer
-	log    *logger.Logger
-	cfg    Config
+	repo  Repository
+	audit AuditRecorder
+	email *email.Renderer
+	log   *logger.Logger
+	cfg   Config
 }
 
-func NewService(repo Repository, audit AuditRecorder, mailer Mailer, renderer *email.Renderer, log *logger.Logger, cfg Config) *Service {
-	return &Service{repo: repo, audit: audit, mailer: mailer, email: renderer, log: log, cfg: cfg}
+func NewService(repo Repository, audit AuditRecorder, renderer *email.Renderer, log *logger.Logger, cfg Config) *Service {
+	return &Service{repo: repo, audit: audit, email: renderer, log: log, cfg: cfg}
 }
 
-func (s *Service) sendInvitationEmail(ctx context.Context, recipientName, recipientEmail, inviteLink string, expiresAt time.Time, resend bool) {
+func (s *Service) invitationEmail(tenantID, recipientName, recipientEmail, inviteLink string, expiresAt time.Time, resend bool) (email.Message, error) {
 	rendered, err := s.email.RenderStaffInvitation(email.StaffInvitationData{
 		CommonData: email.CommonData{
 			RecipientName: recipientName, OrganizationName: s.cfg.OrganizationName,
@@ -72,12 +71,10 @@ func (s *Service) sendInvitationEmail(ctx context.Context, recipientName, recipi
 		InviterName: "An administrator", InviteURL: inviteLink, ExpiresAt: expiresAt, IsResend: resend,
 	})
 	if err != nil {
-		s.log.Error("failed to render invitation email", "error", err.Error())
-		return
+		return email.Message{}, fmt.Errorf("render invitation email: %w", err)
 	}
-	if err := s.mailer.SendHTML(ctx, recipientEmail, rendered.Subject, rendered.Text, rendered.HTML); err != nil {
-		s.log.Error("failed to send invitation email", "error", err.Error())
-	}
+	return email.Message{TenantID: &tenantID, Kind: email.StaffInvitation, To: recipientEmail, Subject: rendered.Subject,
+		Text: rendered.Text, HTML: rendered.HTML, ExpiresAt: &expiresAt}, nil
 }
 
 func (s *Service) invitationLink(ctx context.Context, rawToken string) (string, error) {
@@ -154,6 +151,15 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 		return nil, err
 	}
 	now := time.Now()
+	expiresAt := now.Add(s.cfg.InviteTokenTTL)
+	inviteLink, err := s.invitationLink(ctx, rawToken)
+	if err != nil {
+		return nil, err
+	}
+	message, err := s.invitationEmail(tenantID, req.FullName, req.Email, inviteLink, expiresAt, false)
+	if err != nil {
+		return nil, err
+	}
 
 	err = s.repo.WithinTx(ctx, func(repo Repository) error {
 		if err := repo.CreateInvitedUser(ctx, CreateInvitedUserParams{
@@ -167,20 +173,17 @@ func (s *Service) Invite(ctx context.Context, actorUserID string, req InviteUser
 				return err
 			}
 		}
-		return repo.CreateInvitation(ctx, Invitation{
+		if err := repo.CreateInvitation(ctx, Invitation{
 			ID: invitationID, UserID: userID, InvitedBy: actorUserID,
-			TokenHash: security.HashToken(rawToken), ExpiresAt: now.Add(s.cfg.InviteTokenTTL),
-		})
+			TokenHash: security.HashToken(rawToken), ExpiresAt: expiresAt,
+		}); err != nil {
+			return err
+		}
+		return repo.QueueEmail(ctx, message)
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	inviteLink, err := s.invitationLink(ctx, rawToken)
-	if err != nil {
-		return nil, err
-	}
-	s.sendInvitationEmail(ctx, req.FullName, req.Email, inviteLink, now.Add(s.cfg.InviteTokenTTL), false)
 
 	_ = s.audit.Record(ctx, audit.Entry{
 		UserID: &actorUserID, Action: "user_invited", Result: audit.ResultSuccess,
@@ -207,18 +210,16 @@ func (s *Service) reactivationLink(ctx context.Context, rawToken string) (string
 	return s.tenantURL(identity, "/reactivate?token="+url.QueryEscape(rawToken)), nil
 }
 
-func (s *Service) sendReactivationEmail(ctx context.Context, user *PendingUser, link string, expiresAt time.Time) {
+func (s *Service) reactivationEmail(tenantID string, user *PendingUser, link string, expiresAt time.Time) (email.Message, error) {
 	rendered, err := s.email.RenderAccountReactivation(email.AccountReactivationData{
 		CommonData:      email.CommonData{RecipientName: user.FullName, OrganizationName: s.cfg.OrganizationName},
 		ReactivationURL: link, ExpiresAt: expiresAt,
 	})
 	if err != nil {
-		s.log.Error("failed to render account reactivation email", "error", err.Error())
-		return
+		return email.Message{}, fmt.Errorf("render account reactivation email: %w", err)
 	}
-	if err := s.mailer.SendHTML(ctx, user.Email, rendered.Subject, rendered.Text, rendered.HTML); err != nil {
-		s.log.Error("failed to send account reactivation email", "error", err.Error())
-	}
+	return email.Message{TenantID: &tenantID, Kind: email.AccountReactivation, To: user.Email, Subject: rendered.Subject,
+		Text: rendered.Text, HTML: rendered.HTML, ExpiresAt: &expiresAt}, nil
 }
 
 // RequestReactivation keeps the account inaccessible while issuing a
@@ -241,15 +242,7 @@ func (s *Service) RequestReactivation(ctx context.Context, actorUserID, targetUs
 	}
 	now := time.Now()
 	expiresAt := now.Add(s.cfg.InviteTokenTTL)
-	err = s.repo.WithinTx(ctx, func(repo Repository) error {
-		if err := repo.ConsumeReactivationTokensByUser(ctx, targetUserID); err != nil {
-			return err
-		}
-		return repo.CreateReactivationToken(ctx, ReactivationToken{
-			ID: tokenID, UserID: targetUserID, RequestedBy: actorUserID,
-			TokenHash: security.HashToken(rawToken), ExpiresAt: expiresAt,
-		})
-	})
+	tenantID, err := tenant.ID(ctx)
 	if err != nil {
 		return err
 	}
@@ -257,7 +250,25 @@ func (s *Service) RequestReactivation(ctx context.Context, actorUserID, targetUs
 	if err != nil {
 		return err
 	}
-	s.sendReactivationEmail(ctx, user, link, expiresAt)
+	message, err := s.reactivationEmail(tenantID, user, link, expiresAt)
+	if err != nil {
+		return err
+	}
+	err = s.repo.WithinTx(ctx, func(repo Repository) error {
+		if err := repo.ConsumeReactivationTokensByUser(ctx, targetUserID); err != nil {
+			return err
+		}
+		if err := repo.CreateReactivationToken(ctx, ReactivationToken{
+			ID: tokenID, UserID: targetUserID, RequestedBy: actorUserID,
+			TokenHash: security.HashToken(rawToken), ExpiresAt: expiresAt,
+		}); err != nil {
+			return err
+		}
+		return repo.QueueEmail(ctx, message)
+	})
+	if err != nil {
+		return err
+	}
 	_ = s.audit.Record(ctx, audit.Entry{
 		UserID: &actorUserID, Action: "user_reactivation_requested", Result: audit.ResultSuccess,
 		TargetResource: targetUserID, Metadata: map[string]any{"reason": reason},
@@ -472,6 +483,19 @@ func (s *Service) Resend(ctx context.Context, actorUserID, targetUserID string) 
 		return err
 	}
 	now := time.Now()
+	tenantID, err := tenant.ID(ctx)
+	if err != nil {
+		return err
+	}
+	inviteLink, err := s.invitationLink(ctx, rawToken)
+	if err != nil {
+		return err
+	}
+	expiresAt := now.Add(s.cfg.InviteTokenTTL)
+	message, err := s.invitationEmail(tenantID, user.FullName, user.Email, inviteLink, expiresAt, true)
+	if err != nil {
+		return err
+	}
 
 	err = s.repo.WithinTx(ctx, func(repo Repository) error {
 		if user.Status != UserStatusInvited {
@@ -484,20 +508,17 @@ func (s *Service) Resend(ctx context.Context, actorUserID, targetUserID string) 
 				return err
 			}
 		}
-		return repo.CreateInvitation(ctx, Invitation{
+		if err := repo.CreateInvitation(ctx, Invitation{
 			ID: newID, UserID: targetUserID, InvitedBy: actorUserID,
-			TokenHash: security.HashToken(rawToken), ExpiresAt: now.Add(s.cfg.InviteTokenTTL),
-		})
+			TokenHash: security.HashToken(rawToken), ExpiresAt: expiresAt,
+		}); err != nil {
+			return err
+		}
+		return repo.QueueEmail(ctx, message)
 	})
 	if err != nil {
 		return err
 	}
-
-	inviteLink, err := s.invitationLink(ctx, rawToken)
-	if err != nil {
-		return err
-	}
-	s.sendInvitationEmail(ctx, user.FullName, user.Email, inviteLink, now.Add(s.cfg.InviteTokenTTL), true)
 
 	_ = s.audit.Record(ctx, audit.Entry{
 		UserID: &actorUserID, Action: "invitation_resent", Result: audit.ResultSuccess, TargetResource: targetUserID,

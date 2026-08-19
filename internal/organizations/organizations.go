@@ -83,20 +83,16 @@ type DiscoveryVerifyRequest struct {
 }
 
 type DiscoveryResponse struct {
-	LoginURL string `json:"login_url"`
+	Action   string `json:"action"`
+	LoginURL string `json:"login_url,omitempty"`
 }
 
 type DiscoveryVerifyResponse struct {
 	Email string `json:"email"`
 }
 
-type Mailer interface {
-	SendHTML(ctx context.Context, to, subject, textBody, htmlBody string) error
-}
-
 type Service struct {
 	pool             *pgxpool.Pool
-	mailer           Mailer
 	baseURL          string
 	bcryptCost       int
 	policy           auth.PasswordPolicy
@@ -108,12 +104,12 @@ type Service struct {
 	reservedSlugs    map[string]struct{}
 }
 
-func NewService(pool *pgxpool.Pool, mailer Mailer, renderer *email.Renderer, cfg Config, log *logger.Logger) *Service {
+func NewService(pool *pgxpool.Pool, renderer *email.Renderer, cfg Config, log *logger.Logger) *Service {
 	reserved := make(map[string]struct{}, len(mandatoryReservedSlugs)+len(cfg.ReservedSlugs))
 	for _, slug := range append(mandatoryReservedSlugs, cfg.ReservedSlugs...) {
 		reserved[strings.ToLower(strings.TrimSpace(slug))] = struct{}{}
 	}
-	return &Service{pool: pool, mailer: mailer, baseURL: cfg.BaseURL, bcryptCost: cfg.BcryptCost,
+	return &Service{pool: pool, baseURL: cfg.BaseURL, bcryptCost: cfg.BcryptCost,
 		policy: cfg.PasswordPolicy, log: log, email: renderer, tenantBaseDomain: cfg.TenantBaseDomain,
 		tenantURLScheme: cfg.TenantURLScheme, tenantURLPort: cfg.TenantURLPort, reservedSlugs: reserved}
 }
@@ -177,25 +173,89 @@ func (s *Service) RequestOrganizationDiscovery(ctx context.Context, emailAddress
 		return nil, err
 	}
 	var slug string
-	if err = s.pool.QueryRow(ctx, `SELECT slug FROM discover_active_organizations($1) LIMIT 1`, emailAddress).Scan(&slug); err != nil {
+	if err = s.pool.QueryRow(ctx, `SELECT slug FROM discover_active_organizations($1) LIMIT 1`, emailAddress).Scan(&slug); err == nil {
+		rawToken, err := security.GenerateToken()
+		if err != nil {
+			return nil, err
+		}
+		tokenID, err := utility.GenerateUUID()
+		if err != nil {
+			return nil, err
+		}
+		if _, err = s.pool.Exec(ctx, `INSERT INTO organization_discovery_tokens(id,email,token_hash,expires_at) VALUES($1,$2,$3,$4)`,
+			tokenID, emailAddress, security.HashToken(rawToken), time.Now().Add(15*time.Minute)); err != nil {
+			return nil, err
+		}
+		return &DiscoveryResponse{Action: "login", LoginURL: s.tenantURL(slug, "/login?discovery_token="+url.QueryEscape(rawToken))}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+
+	if err := s.reissuePendingActivation(ctx, emailAddress); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errDiscoveryAccountNotFound
 		}
 		return nil, err
 	}
+	return &DiscoveryResponse{Action: "activation_email_queued"}, nil
+}
+
+func (s *Service) reissuePendingActivation(ctx context.Context, emailAddress string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var tenantID, organizationName, slug, userID, fullName, recipient string
+	err = tx.QueryRow(ctx, `SELECT tenant_id::text,organization_name,slug,user_id::text,full_name,email
+		FROM discover_pending_registration($1)`, emailAddress).
+		Scan(&tenantID, &organizationName, &slug, &userID, &fullName, &recipient)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `SELECT set_config('app.tenant_id',$1,true)`, tenantID); err != nil {
+		return err
+	}
+
 	rawToken, err := security.GenerateToken()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tokenID, err := utility.GenerateUUID()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if _, err = s.pool.Exec(ctx, `INSERT INTO organization_discovery_tokens(id,email,token_hash,expires_at) VALUES($1,$2,$3,$4)`,
-		tokenID, emailAddress, security.HashToken(rawToken), time.Now().Add(15*time.Minute)); err != nil {
-		return nil, err
+	expiresAt := time.Now().Add(24 * time.Hour)
+	link := s.tenantURL(slug, "/activate-organization?token="+url.QueryEscape(rawToken))
+	rendered, err := s.email.RenderOrganizationActivation(email.OrganizationActivationData{
+		CommonData:    email.CommonData{RecipientName: fullName, OrganizationName: organizationName},
+		ActivationURL: link, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		return fmt.Errorf("render organization activation recovery email: %w", err)
 	}
-	return &DiscoveryResponse{LoginURL: s.tenantURL(slug, "/login?discovery_token="+url.QueryEscape(rawToken))}, nil
+	if _, err = tx.Exec(ctx, `UPDATE organization_activation_tokens SET used_at=now()
+		WHERE user_id=$1 AND used_at IS NULL`, userID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO organization_activation_tokens(id,tenant_id,user_id,token_hash,expires_at)
+		VALUES($1,$2,$3,$4,$5)`, tokenID, tenantID, userID, security.HashToken(rawToken), expiresAt); err != nil {
+		return err
+	}
+	if err = email.Enqueue(ctx, tx, email.Message{TenantID: &tenantID, Kind: email.OrganizationActivation, To: recipient,
+		Subject: rendered.Subject, Text: rendered.Text, HTML: rendered.HTML, ExpiresAt: &expiresAt}); err != nil {
+		return err
+	}
+	auditID, err := utility.GenerateUUID()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,tenant_id,user_id,action,result)
+		VALUES($1,$2,$3,'organization_activation_reissued','success')`, auditID, tenantID, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Service) VerifyOrganizationDiscovery(ctx context.Context, rawToken, slug string) (*DiscoveryVerifyResponse, error) {
@@ -266,6 +326,15 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 		return nil, err
 	}
 	now := time.Now()
+	expiresAt := now.Add(24 * time.Hour)
+	link := s.tenantURL(req.Slug, "/activate-organization?token="+url.QueryEscape(rawToken))
+	rendered, err := s.email.RenderOrganizationActivation(email.OrganizationActivationData{
+		CommonData:    email.CommonData{RecipientName: req.AdminFullName, OrganizationName: req.OrganizationName},
+		ActivationURL: link, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render organization activation email: %w", err)
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -291,7 +360,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 		return nil, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO organization_activation_tokens(id,tenant_id,user_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5)`,
-		activationID, tenantID, userID, security.HashToken(rawToken), now.Add(24*time.Hour)); err != nil {
+		activationID, tenantID, userID, security.HashToken(rawToken), expiresAt); err != nil {
 		return nil, err
 	}
 	if err = seedPrescribingReferenceData(ctx, tx); err != nil {
@@ -310,22 +379,12 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*Organizat
 	if _, err = tx.Exec(ctx, `INSERT INTO audit_logs(id,tenant_id,user_id,action,result) VALUES($1,$2,NULL,'organization_registered','success')`, auditID, tenantID); err != nil {
 		return nil, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = email.Enqueue(ctx, tx, email.Message{TenantID: &tenantID, Kind: email.OrganizationActivation, To: req.AdminEmail,
+		Subject: rendered.Subject, Text: rendered.Text, HTML: rendered.HTML, ExpiresAt: &expiresAt}); err != nil {
 		return nil, err
 	}
-	link := s.tenantURL(req.Slug, "/activate-organization?token="+url.QueryEscape(rawToken))
-	rendered, err := s.email.RenderOrganizationActivation(email.OrganizationActivationData{
-		CommonData: email.CommonData{
-			RecipientName: req.AdminFullName, OrganizationName: req.OrganizationName,
-		},
-		ActivationURL: link,
-		ExpiresAt:     now.Add(24 * time.Hour),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("render organization activation email: %w", err)
-	}
-	if err := s.mailer.SendHTML(ctx, req.AdminEmail, rendered.Subject, rendered.Text, rendered.HTML); err != nil {
-		s.log.Error("failed to send organization activation", "error", err.Error())
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return &org, nil
 }

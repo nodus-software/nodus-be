@@ -62,10 +62,14 @@ REFRESH_COOKIE_SECURE=true
 WEBAUTHN_RP_ID=example.com
 WEBAUTHN_ORIGINS=https://example.com
 
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_SENDER=no-reply@example.com
-SMTP_PASSWORD=replace-me
+EMAIL_PROVIDER=zeptomail
+EMAIL_FROM_NAME=Nodus Health
+EMAIL_FROM_ADDRESS=no-reply@example.com
+EMAIL_HTTP_TIMEOUT=10s
+ZEPTOMAIL_API_URL=https://api.zeptomail.com/v1.1/email
+ZEPTOMAIL_SEND_TOKEN=replace-me
+RESEND_API_URL=https://api.resend.com/emails
+RESEND_API_KEY=replace-me
 EMAIL_LOGO_URL=https://res.cloudinary.com/dwjwrng2b/image/upload/v1786552657/full_logo_no_bg_eqgkg0.png
 ```
 
@@ -75,6 +79,11 @@ migration role must be able to create and alter the schema and install the
 `pg_trgm` extension. The runtime role should have only the permissions needed
 by the application. Both agreed databases are empty, so the first deployment
 will apply migrations 1 through 12 and create `schema_migrations`.
+
+Transactional email is queued in PostgreSQL and delivered by the API's
+background worker. Configure both ZeptoMail and Resend credentials if operators
+must be able to switch providers by changing only `EMAIL_PROVIDER` and
+redeploying. The selected provider's sender domain must be verified first.
 
 ## Grafana Cloud Logs
 
