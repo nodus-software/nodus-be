@@ -178,6 +178,8 @@ func main() {
 		TenantResolver:        organizationService,
 		TenantPool:            pool,
 		TenantBaseDomain:      cfg.TenantBaseDomain,
+		TenantURLScheme:       cfg.TenantURLScheme,
+		TenantURLPort:         cfg.TenantURLPort,
 		AllowTenantSlugHeader: cfg.AppEnv != "production",
 	}, log, organizationHandler, authHandler, rolesHandler, usersHandler, invitationHandler, auditHandler, patientsHandler, clinicalHandler)
 

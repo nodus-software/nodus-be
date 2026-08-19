@@ -32,6 +32,8 @@ type Config struct {
 	TenantResolver        middleware.TenantResolver
 	TenantPool            *pgxpool.Pool
 	TenantBaseDomain      string
+	TenantURLScheme       string
+	TenantURLPort         string
 	AllowTenantSlugHeader bool
 }
 
@@ -52,7 +54,7 @@ func New(cfg Config, log *logger.Logger, registrars ...RouteRegistrar) *Server {
 	r.Use(middleware.Recovery(log))
 	r.Use(middleware.Logging(log))
 	r.Use(middleware.SecurityHeaders)
-	r.Use(middleware.CORS(cfg.AllowedOrigins))
+	r.Use(middleware.CORS(cfg.AllowedOrigins, cfg.TenantBaseDomain, cfg.TenantURLScheme, cfg.TenantURLPort))
 	r.Use(middleware.Timeout(cfg.RequestTimeout))
 
 	// Health is intentionally outside tenant and database middleware so that

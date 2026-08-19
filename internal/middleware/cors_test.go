@@ -9,7 +9,7 @@ import (
 
 func TestCORSPreflightAllowsPut(t *testing.T) {
 	origin := "http://localhost:5173"
-	handler := CORS([]string{origin})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := CORS([]string{origin}, "example.com", "https", "")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("preflight request must not reach the next handler")
 	}))
 
@@ -26,5 +26,48 @@ func TestCORSPreflightAllowsPut(t *testing.T) {
 	methods := response.Header().Get("Access-Control-Allow-Methods")
 	if !strings.Contains(methods, http.MethodPut) {
 		t.Fatalf("expected PUT in Access-Control-Allow-Methods, got %q", methods)
+	}
+}
+
+func TestCORSAllowsTenantSubdomain(t *testing.T) {
+	origin := "https://tenant-one.nodus.co.ke"
+	handler := CORS(nil, "nodus.co.ke", "https", "")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Header.Set("Origin", origin)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != origin {
+		t.Fatalf("expected tenant origin %q to be allowed, got %q", origin, got)
+	}
+}
+
+func TestCORSRejectsNonTenantOrigins(t *testing.T) {
+	tests := []string{
+		"https://nodus.co.ke",
+		"https://nodus.co.ke.attacker.com",
+		"https://tenant.nodus.co.ke.attacker.com",
+		"https://nested.tenant.nodus.co.ke",
+		"http://tenant.nodus.co.ke",
+		"https://tenant.nodus.co.ke:8443",
+	}
+
+	for _, origin := range tests {
+		t.Run(origin, func(t *testing.T) {
+			handler := CORS(nil, "nodus.co.ke", "https", "")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/health", nil)
+			req.Header.Set("Origin", origin)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+
+			if got := response.Header().Get("Access-Control-Allow-Origin"); got != "" {
+				t.Fatalf("expected origin to be rejected, got Access-Control-Allow-Origin %q", got)
+			}
+		})
 	}
 }
