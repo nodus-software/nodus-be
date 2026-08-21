@@ -285,12 +285,26 @@ func (s *Service) FinishWebAuthnLogin(ctx context.Context, req WebAuthnLoginVeri
 	if challenge.IsExpired(now) {
 		return nil, ErrChallengeExpired
 	}
+	if s.cfg.SecurityMode == "enforcement" {
+		state, stateErr := s.repo.GetAuthenticationFailure(ctx, challenge.UserID, AuthenticationMechanismMFA)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		if state != nil && state.LockedUntil != nil && state.LockedUntil.After(now) {
+			return nil, ErrInvalidCredentials
+		}
+		if state != nil && state.NextAttemptAt != nil && state.NextAttemptAt.After(now) {
+			return nil, &RetryError{Cause: ErrAuthenticationDelayed, RetryAfter: time.Until(*state.NextAttemptAt)}
+		}
+	}
 	ceremony, err := s.repo.GetWebAuthnCeremonyByID(ctx, req.CeremonyID)
 	if err != nil {
-		return nil, ErrWebAuthnInvalid
+		user := &User{ID: challenge.UserID}
+		return nil, s.handleFailedAttempt(ctx, user, ip, "webauthn_invalid", AuthenticationMechanismMFA)
 	}
 	if ceremony.UserID != challenge.UserID || ceremony.Purpose != "authentication" || ceremony.LoginChallengeID == nil || *ceremony.LoginChallengeID != challenge.ID || ceremony.ConsumedAt != nil || !ceremony.ExpiresAt.After(now) {
-		return nil, ErrWebAuthnInvalid
+		user := &User{ID: challenge.UserID}
+		return nil, s.handleFailedAttempt(ctx, user, ip, "webauthn_invalid", AuthenticationMechanismMFA)
 	}
 	u, err := s.webAuthnUser(ctx, challenge.UserID)
 	if err != nil {
@@ -302,11 +316,13 @@ func (s *Service) FinishWebAuthnLogin(ctx context.Context, req WebAuthnLoginVeri
 	}
 	parsed, err := protocol.ParseCredentialRequestResponseBytes(req.Credential)
 	if err != nil {
-		return nil, ErrWebAuthnInvalid
+		user := &User{ID: challenge.UserID}
+		return nil, s.handleFailedAttempt(ctx, user, ip, "webauthn_invalid", AuthenticationMechanismMFA)
 	}
 	credential, err := webauthn.ValidateLogin(u, session, parsed)
 	if err != nil {
-		return nil, ErrWebAuthnInvalid
+		user := &User{ID: challenge.UserID}
+		return nil, s.handleFailedAttempt(ctx, user, ip, "webauthn_invalid", AuthenticationMechanismMFA)
 	}
 	encoded, err := json.Marshal(credential)
 	if err != nil {

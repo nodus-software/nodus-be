@@ -39,6 +39,14 @@ type PasswordPolicy struct {
 	MaxAgeDays            int
 }
 
+type FailurePolicy struct {
+	ObservationWindow time.Duration
+	CycleWindow       time.Duration
+	LockThreshold     int
+	InitialLock       time.Duration
+	MaximumLock       time.Duration
+}
+
 // Config is the subset of application configuration the auth service needs.
 // Defined in this package (rather than depending on the top-level config
 // package) so the domain stays decoupled from how the app is wired together;
@@ -55,6 +63,9 @@ type Config struct {
 	SessionRefreshTokenTTL time.Duration
 	ChallengeTokenTTL      time.Duration
 	PasswordResetTokenTTL  time.Duration
+	RecoveryEmailTokenTTL  time.Duration
+	RecoverySessionTTL     time.Duration
+	RecoveryMaxAttempts    int
 
 	BcryptCost int
 
@@ -68,6 +79,13 @@ type Config struct {
 
 	LockoutMaxAttempts int
 	LockoutDuration    time.Duration
+	FailurePolicy      FailurePolicy
+	SecurityMode       string
+	RateLimitWindow    time.Duration
+	IdentifierLimit    int
+	IPLimit            int
+	TenantLimit        int
+	ContextLimit       int
 
 	PasswordResetMaxPerUsernamePerHour int
 	PasswordResetMaxPerIPPerHour       int
@@ -95,9 +113,41 @@ type Service struct {
 	cfg         Config
 	webauthn    *wa.WebAuthn
 	webauthnErr error
+	controls    SecurityControls
 }
 
-func NewService(repo Repository, audit AuditRecorder, renderer *email.Renderer, log *logger.Logger, cfg Config) *Service {
+func NewService(repo Repository, audit AuditRecorder, renderer *email.Renderer, log *logger.Logger, cfg Config, controls ...SecurityControls) *Service {
+	if cfg.FailurePolicy.ObservationWindow <= 0 {
+		cfg.FailurePolicy.ObservationWindow = 15 * time.Minute
+	}
+	if cfg.FailurePolicy.CycleWindow <= 0 {
+		cfg.FailurePolicy.CycleWindow = 24 * time.Hour
+	}
+	if cfg.FailurePolicy.LockThreshold <= 0 {
+		cfg.FailurePolicy.LockThreshold = 10
+	}
+	if cfg.FailurePolicy.InitialLock <= 0 {
+		cfg.FailurePolicy.InitialLock = 15 * time.Minute
+	}
+	if cfg.FailurePolicy.MaximumLock <= 0 {
+		cfg.FailurePolicy.MaximumLock = time.Hour
+	}
+	if cfg.RateLimitWindow <= 0 {
+		cfg.RateLimitWindow = 15 * time.Minute
+	}
+	if cfg.RecoveryEmailTokenTTL <= 0 {
+		cfg.RecoveryEmailTokenTTL = 10 * time.Minute
+	}
+	if cfg.RecoverySessionTTL <= 0 {
+		cfg.RecoverySessionTTL = 10 * time.Minute
+	}
+	if cfg.RecoveryMaxAttempts <= 0 {
+		cfg.RecoveryMaxAttempts = 5
+	}
+	var securityControls SecurityControls
+	if len(controls) > 0 {
+		securityControls = controls[0]
+	}
 	if cfg.WebAuthnRPDisplayName == "" {
 		cfg.WebAuthnRPDisplayName = "Nodus Health"
 	}
@@ -111,7 +161,7 @@ func NewService(repo Repository, audit AuditRecorder, renderer *email.Renderer, 
 		cfg.WebAuthnCeremonyTTL = 5 * time.Minute
 	}
 	w, werr := wa.New(&wa.Config{RPDisplayName: cfg.WebAuthnRPDisplayName, RPID: cfg.WebAuthnRPID, RPOrigins: cfg.WebAuthnOrigins, AttestationPreference: protocol.PreferNoAttestation, AuthenticatorSelection: protocol.AuthenticatorSelection{ResidentKey: protocol.ResidentKeyRequirementPreferred, UserVerification: protocol.VerificationRequired}})
-	return &Service{repo: repo, audit: audit, email: renderer, log: log, cfg: cfg, webauthn: w, webauthnErr: werr}
+	return &Service{repo: repo, audit: audit, email: renderer, log: log, cfg: cfg, webauthn: w, webauthnErr: werr, controls: securityControls}
 }
 
 // dummyPasswordHash is compared against on a not-found username so that
@@ -137,13 +187,26 @@ func ptr(s string) *string { return &s }
 
 // Login is step 1: validate credentials and, if valid, issue an MFA
 // challenge. It never establishes a session by itself.
-func (s *Service) Login(ctx context.Context, req LoginRequest, ip string) (*LoginChallengeResponse, error) {
+func (s *Service) Login(ctx context.Context, req LoginRequest, ip string, userAgents ...string) (*LoginChallengeResponse, error) {
+	userAgent := ""
+	if len(userAgents) > 0 {
+		userAgent = userAgents[0]
+	}
+	if err := s.checkSupplementalRequestLimits(ctx, req.Email, ip, userAgent); err != nil {
+		return nil, err
+	}
 	user, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		if !errors.Is(err, ErrUserNotFound) {
 			return nil, err
 		}
+		requireCaptcha := s.supplementalFailureCount(ctx, req.Email) >= 5
+		if err := s.verifyRequiredCaptcha(ctx, "", requireCaptcha, req.TurnstileToken, ip); err != nil {
+			security.ComparePassword(dummyPasswordHash, req.Password)
+			return nil, err
+		}
 		security.ComparePassword(dummyPasswordHash, req.Password)
+		s.recordSupplementalFailure(ctx, req.Email)
 		s.recordLoginFailure(ctx, nil, ip, "user_not_found")
 		return nil, ErrInvalidCredentials
 	}
@@ -151,7 +214,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip string) (*Logi
 	now := time.Now()
 	if user.IsLocked(now) {
 		s.recordLoginFailure(ctx, &user.ID, ip, "account_locked")
-		return nil, &LockedError{LockedUntil: *user.LockedUntil}
+		return nil, ErrInvalidCredentials
 	}
 	// A timed lockout starts a fresh attempt window once it expires. Leaving the
 	// counter at the threshold would make the next single typo immediately lock
@@ -168,9 +231,28 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip string) (*Logi
 		s.recordLoginFailure(ctx, &user.ID, ip, "account_not_active")
 		return nil, ErrInvalidCredentials
 	}
+	state, err := s.repo.GetAuthenticationFailure(ctx, user.ID, AuthenticationMechanismPassword)
+	if err != nil {
+		return nil, err
+	}
+	requireCaptcha := state != nil && state.FailureCount >= 5 && now.Sub(state.WindowStartedAt) < s.cfg.FailurePolicy.ObservationWindow
+	if s.cfg.SecurityMode == "enforcement" && state != nil {
+		if state.LockedUntil != nil && state.LockedUntil.After(now) {
+			s.recordLoginFailure(ctx, &user.ID, ip, "temporary_restriction")
+			return nil, ErrInvalidCredentials
+		}
+		if state.NextAttemptAt != nil && state.NextAttemptAt.After(now) {
+			return nil, &RetryError{Cause: ErrAuthenticationDelayed, RetryAfter: time.Until(*state.NextAttemptAt)}
+		}
+	}
+	if err := s.verifyRequiredCaptcha(ctx, user.ID, requireCaptcha, req.TurnstileToken, ip); err != nil {
+		security.ComparePassword(dummyPasswordHash, req.Password)
+		return nil, err
+	}
 
 	if !security.ComparePassword(user.PasswordHash, req.Password) {
-		return nil, s.handleFailedAttempt(ctx, user, ip, "bad_password")
+		s.recordSupplementalFailure(ctx, req.Email)
+		return nil, s.handleFailedAttempt(ctx, user, ip, "bad_password", AuthenticationMechanismPassword)
 	}
 
 	factors, err := s.repo.ListMFAFactorsByUser(ctx, user.ID)
@@ -213,21 +295,116 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, ip string) (*Logi
 	return &LoginChallengeResponse{ChallengeToken: rawChallenge, MFAMethods: methods}, nil
 }
 
-func (s *Service) handleFailedAttempt(ctx context.Context, user *User, ip, reason string) error {
-	attempts, err := s.repo.IncrementFailedLoginAttempts(ctx, user.ID)
+func (s *Service) handleFailedAttempt(ctx context.Context, user *User, ip, reason string, mechanism AuthenticationMechanism) error {
+	var state *AuthenticationFailureState
+	err := s.repo.WithinTx(ctx, func(repo Repository) error {
+		observed, err := repo.ObserveAuthenticationFailure(ctx, user.ID, mechanism, s.cfg.FailurePolicy)
+		if err != nil {
+			return err
+		}
+		state = observed
+		if s.cfg.SecurityMode != "enforcement" || observed == nil || observed.FailureCount != s.cfg.FailurePolicy.LockThreshold || observed.LockedUntil == nil {
+			return nil
+		}
+		body := "A temporary authentication restriction was applied to your account after repeated failed attempts. If this was not you, use account recovery or contact your administrator."
+		dedupeWindow := observed.WindowStartedAt.UTC().Format(time.RFC3339)
+		return repo.QueueEmail(ctx, email.Message{Kind: email.SecurityNotification, To: user.Email, Subject: "Temporary Nodus Health authentication restriction", Text: body, HTML: "<p>" + body + "</p>", DedupeKey: "auth-lock:" + user.ID + ":" + string(mechanism) + ":" + dedupeWindow})
+	})
 	if err != nil {
 		return err
 	}
-	if attempts >= s.cfg.LockoutMaxAttempts {
-		lockedUntil := time.Now().Add(s.cfg.LockoutDuration)
-		if err := s.repo.LockUser(ctx, user.ID, lockedUntil); err != nil {
-			return err
-		}
-		s.recordLoginFailure(ctx, &user.ID, ip, reason+"_locked_out")
-		return &LockedError{LockedUntil: lockedUntil}
+	if state.LockedUntil != nil && state.LockedUntil.After(time.Now()) {
+		s.recordLoginFailure(ctx, &user.ID, ip, reason+"_restricted")
+		return ErrInvalidCredentials
 	}
 	s.recordLoginFailure(ctx, &user.ID, ip, reason)
 	return ErrInvalidCredentials
+}
+
+func (s *Service) verifyRequiredCaptcha(ctx context.Context, userID string, required bool, token, ip string) error {
+	if !required || s.cfg.SecurityMode != "enforcement" {
+		return nil
+	}
+	if strings.TrimSpace(token) == "" {
+		return &RetryError{Cause: ErrAuthenticationChallenge}
+	}
+	if s.controls.RateLimits != nil {
+		count, limitErr := s.controls.RateLimits.Increment(ctx, "captcha_verify", ip, s.cfg.RateLimitWindow)
+		if limitErr != nil {
+			s.log.Error("captcha verification limit unavailable", "error", limitErr.Error())
+		} else if s.cfg.ContextLimit > 0 && count > int64(s.cfg.ContextLimit) {
+			return ErrRateLimitExceeded
+		}
+	}
+	if s.controls.Turnstile == nil {
+		return ErrAuthenticationUnavailable
+	}
+	valid, err := s.controls.Turnstile.Verify(ctx, token, ip)
+	if err != nil {
+		s.log.Error("turnstile verification unavailable", "error", err.Error())
+		return ErrAuthenticationUnavailable
+	}
+	if !valid {
+		if userID != "" {
+			if _, observeErr := s.repo.ObserveAuthenticationFailure(ctx, userID, AuthenticationMechanismCaptcha, s.cfg.FailurePolicy); observeErr != nil {
+				s.log.Error("failed to record captcha failure", "error", observeErr.Error())
+			}
+		}
+		return &RetryError{Cause: ErrAuthenticationChallenge}
+	}
+	return nil
+}
+
+func (s *Service) checkSupplementalRequestLimits(ctx context.Context, identifier, ip, userAgent string) error {
+	if s.controls.RateLimits == nil {
+		return nil
+	}
+	tenantID, _ := tenant.ID(ctx)
+	layers := []struct {
+		scope, value string
+		limit        int
+	}{
+		{"identifier", identifier, s.cfg.IdentifierLimit},
+		{"endpoint", tenantID + "|login", s.cfg.TenantLimit},
+		{"ip", ip, s.cfg.IPLimit}, {"tenant", tenantID, s.cfg.TenantLimit},
+		{"context", ip + "|" + userAgent, s.cfg.ContextLimit},
+	}
+	for _, layer := range layers {
+		if layer.limit <= 0 || layer.value == "" {
+			continue
+		}
+		count, err := s.controls.RateLimits.Increment(ctx, layer.scope, layer.value, s.cfg.RateLimitWindow)
+		if err != nil {
+			s.log.Error("supplemental authentication limits unavailable", "error", err.Error())
+			_ = s.audit.Record(ctx, audit.Entry{Action: "authentication_rate_limit_unavailable", IPAddress: ip, Result: audit.ResultFailure, ReasonCode: "redis_unavailable"})
+			return nil
+		}
+		if s.cfg.SecurityMode == "enforcement" && count > int64(layer.limit) {
+			return ErrRateLimitExceeded
+		}
+	}
+	return nil
+}
+
+func (s *Service) supplementalFailureCount(ctx context.Context, identifier string) int64 {
+	if s.controls.RateLimits == nil {
+		return 0
+	}
+	n, err := s.controls.RateLimits.Count(ctx, "identifier_failure", identifier)
+	if err != nil {
+		s.log.Error("supplemental failure count unavailable", "error", err.Error())
+		return 0
+	}
+	return n
+}
+
+func (s *Service) recordSupplementalFailure(ctx context.Context, identifier string) {
+	if s.controls.RateLimits == nil {
+		return
+	}
+	if _, err := s.controls.RateLimits.Increment(ctx, "identifier_failure", identifier, s.cfg.RateLimitWindow); err != nil {
+		s.log.Error("supplemental failure counter unavailable", "error", err.Error())
+	}
 }
 
 func (s *Service) recordLoginFailure(ctx context.Context, userID *string, ip, reason string) {
@@ -268,13 +445,29 @@ func (s *Service) VerifyMFA(ctx context.Context, req VerifyMFARequest, ip, userA
 	if err != nil {
 		return nil, err
 	}
+	mechanism := AuthenticationMechanismMFA
+	if req.Method == "recovery_code" {
+		mechanism = AuthenticationMechanismRecovery
+	}
+	if s.cfg.SecurityMode == "enforcement" {
+		state, stateErr := s.repo.GetAuthenticationFailure(ctx, user.ID, mechanism)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		if state != nil && state.LockedUntil != nil && state.LockedUntil.After(now) {
+			return nil, ErrInvalidCredentials
+		}
+		if state != nil && state.NextAttemptAt != nil && state.NextAttemptAt.After(now) {
+			return nil, &RetryError{Cause: ErrAuthenticationDelayed, RetryAfter: time.Until(*state.NextAttemptAt)}
+		}
+	}
 
 	valid, err := s.verifyMFACode(ctx, user, req)
 	if err != nil {
 		return nil, err
 	}
 	if !valid {
-		return nil, s.handleFailedAttempt(ctx, user, ip, "mfa_code_invalid")
+		return nil, s.handleFailedAttempt(ctx, user, ip, "mfa_code_invalid", mechanism)
 	}
 
 	var recoveryHash string
@@ -284,7 +477,7 @@ func (s *Service) VerifyMFA(ctx context.Context, req VerifyMFARequest, ip, userA
 	pair, err := s.establishSession(ctx, user, challenge, ip, userAgent, deviceLabel, req.RememberMe, recoveryHash, now)
 	if err != nil {
 		if errors.Is(err, ErrMFACodeInvalid) {
-			return nil, s.handleFailedAttempt(ctx, user, ip, "mfa_code_invalid")
+			return nil, s.handleFailedAttempt(ctx, user, ip, "mfa_code_invalid", mechanism)
 		}
 		return nil, err
 	}
@@ -347,6 +540,9 @@ func (s *Service) establishSession(ctx context.Context, user *User, challenge *L
 			return err
 		}
 		if err := repo.ResetFailedLoginAttempts(ctx, user.ID); err != nil {
+			return err
+		}
+		if err := repo.ResetAuthenticationFailures(ctx, user.ID); err != nil {
 			return err
 		}
 
@@ -741,7 +937,7 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, userID string, re
 		}
 		body := "Your MFA recovery codes were replaced. If this was not you, contact your administrator immediately."
 		return repo.QueueEmail(ctx, email.Message{TenantID: tenantID, Kind: email.SecurityNotification, To: user.Email,
-			Subject: "Your Nodus Health recovery codes were replaced", Text: body, HTML: "<p>" + body + "</p>"})
+			Subject: "Your Nodus Health recovery codes were replaced", Text: body, HTML: "<p>" + body + "</p>", DedupeKey: "recovery-codes:" + user.ID + ":" + time.Now().UTC().Format("2006-01-02")})
 	})
 	if err != nil {
 		return nil, err
@@ -776,7 +972,11 @@ func (s *Service) ChangePassword(ctx context.Context, userID, sessionID string, 
 		if err := repo.RevokeSessionsByUserExceptSession(ctx, userID, sessionID); err != nil {
 			return err
 		}
-		return repo.RevokeRefreshTokensByUserExceptSession(ctx, userID, sessionID)
+		if err := repo.RevokeRefreshTokensByUserExceptSession(ctx, userID, sessionID); err != nil {
+			return err
+		}
+		body := "Your Nodus Health password was changed. If this was not you, use account recovery or contact your administrator immediately."
+		return repo.QueueEmail(ctx, email.Message{Kind: email.SecurityNotification, To: user.Email, Subject: "Your Nodus Health password changed", Text: body, HTML: "<p>" + body + "</p>", DedupeKey: "password-change:" + user.ID + ":" + time.Now().UTC().Format("2006-01-02")})
 	})
 	if err != nil {
 		return err
@@ -886,6 +1086,10 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req ConfirmPasswordR
 		_ = s.repo.ConsumePasswordResetToken(ctx, token.ID)
 		return ErrResetTokenInvalid
 	}
+	user, err := s.repo.GetUserByID(ctx, token.UserID)
+	if err != nil {
+		return err
+	}
 
 	// Burn the token now — first use, whether or not what follows succeeds.
 	if err := s.repo.ConsumePasswordResetToken(ctx, token.ID); err != nil {
@@ -911,7 +1115,11 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req ConfirmPasswordR
 		if err := repo.RevokeRefreshTokensByUser(ctx, token.UserID); err != nil {
 			return err
 		}
-		return repo.InvalidateOtherPasswordResetTokens(ctx, token.UserID, token.ID)
+		if err := repo.InvalidateOtherPasswordResetTokens(ctx, token.UserID, token.ID); err != nil {
+			return err
+		}
+		body := "Your Nodus Health password was reset. If this was not you, contact your organization administrator immediately."
+		return repo.QueueEmail(ctx, email.Message{Kind: email.SecurityNotification, To: user.Email, Subject: "Your Nodus Health password was reset", Text: body, HTML: "<p>" + body + "</p>", DedupeKey: "password-reset:" + user.ID + ":" + now.UTC().Format("2006-01-02")})
 	})
 	if err != nil {
 		return err

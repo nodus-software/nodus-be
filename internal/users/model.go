@@ -34,6 +34,11 @@ type User struct {
 	LastAccessReviewAt  *time.Time
 	NextAccessReviewDue *time.Time
 	DeactivatedAt       *time.Time
+	DeactivatedBy       *string
+	DeactivationReason  *string
+	SuspendedAt         *time.Time
+	SuspendedBy         *string
+	SuspensionReason    *string
 	InvitationExpiresAt *time.Time
 	InvitationUsedAt    *time.Time
 	MFAEnrolled         bool
@@ -41,6 +46,12 @@ type User struct {
 	Permissions         []string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+}
+
+type TemporaryRestriction struct {
+	Mechanism                  string
+	FailureCount               int
+	NextAttemptAt, LockedUntil *time.Time
 }
 
 func (u *User) IsLocked(now time.Time) bool {

@@ -88,6 +88,12 @@ func TestLoginMFA_WrongCode_Returns401(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", rec.Code, rec.Body.String())
 	}
+	if got := env.Repo.failureStates[userID+":mfa"].FailureCount; got != 1 {
+		t.Fatalf("mfa failures=%d, want 1", got)
+	}
+	if got := env.Repo.failureStates[userID+":password"].FailureCount; got != 0 {
+		t.Fatalf("password failures=%d after MFA failure, want 0", got)
+	}
 }
 
 func TestLoginMFA_AcceptsAdjacentTOTPInterval(t *testing.T) {

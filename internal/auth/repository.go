@@ -20,6 +20,9 @@ type Repository interface {
 	IncrementFailedLoginAttempts(ctx context.Context, userID string) (int, error)
 	LockUser(ctx context.Context, userID string, until time.Time) error
 	ResetFailedLoginAttempts(ctx context.Context, userID string) error
+	ObserveAuthenticationFailure(ctx context.Context, userID string, mechanism AuthenticationMechanism, policy FailurePolicy) (*AuthenticationFailureState, error)
+	GetAuthenticationFailure(ctx context.Context, userID string, mechanism AuthenticationMechanism) (*AuthenticationFailureState, error)
+	ResetAuthenticationFailures(ctx context.Context, userID string) error
 
 	CreateLoginChallenge(ctx context.Context, challenge LoginChallenge) error
 	GetLoginChallengeByHash(ctx context.Context, tokenHash string) (*LoginChallenge, error)
@@ -48,6 +51,15 @@ type Repository interface {
 	RecordPasswordResetAttempt(ctx context.Context, id, usernameAttempted, ip string) error
 	CountPasswordResetAttemptsByUsername(ctx context.Context, username string, since time.Time) (int, error)
 	CountPasswordResetAttemptsByIP(ctx context.Context, ip string, since time.Time) (int, error)
+	InvalidateRecoveryEmailTokens(ctx context.Context, userID string, intent RecoveryIntent) error
+	CreateRecoveryEmailToken(ctx context.Context, token RecoveryEmailToken, tokenHash string) error
+	ConsumeRecoveryEmailToken(ctx context.Context, tokenHash string) (*RecoveryEmailToken, error)
+	CreateRecoverySession(ctx context.Context, session RecoverySession, tokenHash string) error
+	GetRecoverySessionByHash(ctx context.Context, tokenHash string) (*RecoverySession, error)
+	IncrementRecoverySessionFailure(ctx context.Context, id string) (int, error)
+	CompleteRecoveryPassword(ctx context.Context, id string) error
+	CompleteRecoveryMFA(ctx context.Context, id string) error
+	InvalidateRecoverySessionsByUser(ctx context.Context, userID, exceptID string) error
 	QueueEmail(ctx context.Context, message email.Message) error
 
 	CreateMFAFactor(ctx context.Context, factor MFAFactor) (*MFAFactor, error)
@@ -70,6 +82,7 @@ type Repository interface {
 	GetWebAuthnCeremonyByID(ctx context.Context, id string) (*WebAuthnCeremony, error)
 	ConsumeWebAuthnCeremony(ctx context.Context, id string) error
 	DeletePendingTOTPFactors(ctx context.Context, userID string) error
+	DeleteSupersededMFAFactors(ctx context.Context, userID, keepFactorID string) error
 
 	GetRolesByUser(ctx context.Context, userID string) ([]Role, error)
 	GetEffectivePermissionsByUser(ctx context.Context, userID string) ([]string, error)

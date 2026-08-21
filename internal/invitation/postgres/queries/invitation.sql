@@ -103,7 +103,8 @@ WHERE user_id = $1
 -- name: ActivateReactivatedUser :exec
 UPDATE users
 SET status = 'active', password_hash = $2, password_changed_at = now(),
-    deactivated_at = NULL, last_access_review_at = $3, next_access_review_due = $4
+    deactivated_at = NULL, deactivated_by = NULL, deactivation_reason = NULL,
+    last_access_review_at = $3, next_access_review_due = $4
 WHERE id = $1 AND status = 'deactivated'
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
 

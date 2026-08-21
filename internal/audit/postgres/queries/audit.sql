@@ -1,6 +1,7 @@
 -- name: InsertAuditLog :exec
-INSERT INTO audit_logs (id, "timestamp", user_id, action, target_resource, ip_address, result, metadata)
-VALUES ($1, $2, $3, $4, $5, $6, $7, sqlc.arg(metadata)::text::jsonb);
+INSERT INTO audit_logs (id, "timestamp", user_id, target_user_id, action, target_resource,
+  ip_address, request_id, user_agent, reason_code, privileged_reference, result, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, sqlc.arg(metadata)::text::jsonb);
 
 -- name: ListAuditLogs :many
 SELECT * FROM audit_logs

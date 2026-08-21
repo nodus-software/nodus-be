@@ -14,7 +14,8 @@ import (
 const activateReactivatedUser = `-- name: ActivateReactivatedUser :exec
 UPDATE users
 SET status = 'active', password_hash = $2, password_changed_at = now(),
-    deactivated_at = NULL, last_access_review_at = $3, next_access_review_due = $4
+    deactivated_at = NULL, deactivated_by = NULL, deactivation_reason = NULL,
+    last_access_review_at = $3, next_access_review_due = $4
 WHERE id = $1 AND status = 'deactivated'
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
@@ -158,7 +159,7 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 const createInvitedUser = `-- name: CreateInvitedUser :one
 INSERT INTO users (id, full_name, username, email, provider_identifier, status)
 VALUES ($1, $2, $3, $4, $5, 'invited')
-RETURNING id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at
+RETURNING id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at, suspended_at, suspended_by, suspension_reason, deactivated_by, deactivation_reason
 `
 
 type CreateInvitedUserParams struct {
@@ -195,6 +196,11 @@ func (q *Queries) CreateInvitedUser(ctx context.Context, arg CreateInvitedUserPa
 		&i.UpdatedAt,
 		&i.TenantID,
 		&i.DeactivatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedBy,
+		&i.SuspensionReason,
+		&i.DeactivatedBy,
+		&i.DeactivationReason,
 	)
 	return i, err
 }
@@ -337,7 +343,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at, suspended_at, suspended_by, suspension_reason, deactivated_by, deactivation_reason FROM users
 WHERE tenant_id = $1
   AND email = $2
 `
@@ -367,12 +373,17 @@ func (q *Queries) GetUserByEmail(ctx context.Context, arg GetUserByEmailParams) 
 		&i.UpdatedAt,
 		&i.TenantID,
 		&i.DeactivatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedBy,
+		&i.SuspensionReason,
+		&i.DeactivatedBy,
+		&i.DeactivationReason,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at, suspended_at, suspended_by, suspension_reason, deactivated_by, deactivation_reason FROM users
 WHERE id = $1
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
@@ -397,6 +408,11 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.UpdatedAt,
 		&i.TenantID,
 		&i.DeactivatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedBy,
+		&i.SuspensionReason,
+		&i.DeactivatedBy,
+		&i.DeactivationReason,
 	)
 	return i, err
 }

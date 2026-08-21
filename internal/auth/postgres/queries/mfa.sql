@@ -71,3 +71,6 @@ WHERE id=$1 AND consumed_at IS NULL AND expires_at>now();
 
 -- name: DeletePendingTOTPFactors :exec
 DELETE FROM mfa_factors WHERE user_id=$1 AND type='totp' AND confirmed_at IS NULL;
+
+-- name: DeleteSupersededMFAFactors :exec
+DELETE FROM mfa_factors WHERE user_id=$1 AND id != $2;

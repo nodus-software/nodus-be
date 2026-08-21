@@ -92,6 +92,9 @@ func main() {
 		SessionRefreshTokenTTL: cfg.SessionRefreshTokenTTL,
 		ChallengeTokenTTL:      cfg.ChallengeTokenTTL,
 		PasswordResetTokenTTL:  cfg.PasswordResetTokenTTL,
+		RecoveryEmailTokenTTL:  cfg.RecoveryEmailTokenTTL,
+		RecoverySessionTTL:     cfg.RecoverySessionTTL,
+		RecoveryMaxAttempts:    cfg.RecoveryMaxAttempts,
 
 		BcryptCost: cfg.BcryptCost,
 
@@ -105,6 +108,19 @@ func main() {
 
 		LockoutMaxAttempts: cfg.LockoutMaxAttempts,
 		LockoutDuration:    cfg.LockoutDuration,
+		FailurePolicy: auth.FailurePolicy{
+			ObservationWindow: cfg.AuthFailureObservationWindow,
+			CycleWindow:       cfg.AuthFailureCycleWindow,
+			LockThreshold:     cfg.AuthFailureLockThreshold,
+			InitialLock:       cfg.AuthFailureInitialLock,
+			MaximumLock:       cfg.AuthFailureMaximumLock,
+		},
+		SecurityMode:    cfg.AuthSecurityMode,
+		RateLimitWindow: cfg.AuthRateLimitWindow,
+		IdentifierLimit: cfg.AuthRateLimitIdentifierLimit,
+		IPLimit:         cfg.AuthRateLimitIPLimit,
+		TenantLimit:     cfg.AuthRateLimitTenantLimit,
+		ContextLimit:    cfg.AuthRateLimitContextLimit,
 
 		PasswordResetMaxPerUsernamePerHour: cfg.PasswordResetMaxPerUsernamePerHour,
 		PasswordResetMaxPerIPPerHour:       cfg.PasswordResetMaxPerIPPerHour,
@@ -119,7 +135,16 @@ func main() {
 		},
 	}
 
-	authService := auth.NewService(authRepo, auditService, emailRenderer, log, authCfg)
+	controls := auth.SecurityControls{}
+	if cfg.RedisAddr != "" && cfg.AuthRateLimitHMACSecret != "" {
+		controls.RateLimits = auth.NewRedisRateLimitStore(cfg.RedisAddr, cfg.RedisPassword, cfg.AuthRateLimitHMACSecret)
+	}
+	if cfg.AppEnv == "production" {
+		controls.Turnstile = auth.NewCloudflareTurnstileVerifier(cfg.TurnstileSecretKey, cfg.TurnstileVerifyURL, cfg.TurnstileTimeout)
+	} else {
+		controls.Turnstile = auth.DeterministicTurnstileVerifier{Token: cfg.TurnstileTestToken}
+	}
+	authService := auth.NewService(authRepo, auditService, emailRenderer, log, authCfg, controls)
 	sameSite := http.SameSiteLaxMode
 	switch cfg.RefreshCookieSameSite {
 	case "strict":

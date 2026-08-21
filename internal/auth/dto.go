@@ -8,8 +8,14 @@ import (
 )
 
 type LoginRequest struct {
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required"`
+	Email          string `json:"email" validate:"required,email"`
+	Password       string `json:"password" validate:"required"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
+}
+
+type AuthenticationChallengeResponse struct {
+	Challenge  string `json:"challenge"`
+	RetryAfter int    `json:"retry_after,omitempty"`
 }
 
 type LoginChallengeResponse struct {
@@ -140,6 +146,40 @@ type RequestPasswordResetRequest struct {
 type ConfirmPasswordResetRequest struct {
 	ResetToken  string `json:"reset_token" validate:"required"`
 	NewPassword string `json:"new_password" validate:"required"`
+}
+
+type RecoveryRequest struct {
+	Email          string         `json:"email" validate:"required,email"`
+	Intent         RecoveryIntent `json:"intent" validate:"required,oneof=password mfa both"`
+	TurnstileToken string         `json:"turnstile_token,omitempty"`
+}
+type RecoveryVerifyRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+type RecoveryVerifyResponse struct {
+	RecoveryToken string    `json:"recovery_token"`
+	Capabilities  []string  `json:"capabilities"`
+	ExpiresAt     time.Time `json:"expires_at"`
+}
+type RecoveryPasswordRequest struct {
+	RecoveryToken string `json:"recovery_token" validate:"required"`
+	NewPassword   string `json:"new_password" validate:"required"`
+}
+type RecoveryTOTPSetupRequest struct {
+	RecoveryToken string `json:"recovery_token" validate:"required"`
+}
+type RecoveryTOTPConfirmRequest struct {
+	RecoveryToken string `json:"recovery_token" validate:"required"`
+	Code          string `json:"code" validate:"required"`
+}
+type RecoveryWebAuthnOptionsRequest struct {
+	RecoveryToken string `json:"recovery_token" validate:"required"`
+	Label         string `json:"label" validate:"required,max=80"`
+}
+type RecoveryWebAuthnVerifyRequest struct {
+	RecoveryToken string          `json:"recovery_token" validate:"required"`
+	CeremonyID    string          `json:"ceremony_id" validate:"required"`
+	Credential    json.RawMessage `json:"credential" validate:"required"`
 }
 
 type SessionResponse struct {

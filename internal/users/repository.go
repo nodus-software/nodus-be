@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+import "nodus-health/internal/email"
+
 // Repository persists the admin-facing view of a user: listing/filtering,
 // role assignment, status, provider identifier, access review bookkeeping,
 // and lockout clearing. It does not own credentials or session state —
@@ -13,7 +15,8 @@ type Repository interface {
 	ListUsers(ctx context.Context, filter ListUsersFilter) ([]User, error)
 	GetUserByID(ctx context.Context, id string) (*User, error)
 	ReplaceUserRoles(ctx context.Context, userID string, roleIDs []string) error
-	UpdateUserStatus(ctx context.Context, userID, status string) error
+	SuspendUser(ctx context.Context, userID, actorUserID, reason string, suspendedAt time.Time) error
+	RestoreUser(ctx context.Context, userID string) error
 	SetProviderIdentifier(ctx context.Context, userID, identifier string) error
 	RecordAccessReview(ctx context.Context, userID string, reviewedAt, nextDue time.Time) error
 	UnlockUser(ctx context.Context, userID string) error
@@ -21,12 +24,15 @@ type Repository interface {
 	HasSuperuserRole(ctx context.Context, userID string) (bool, error)
 	CountOtherActiveSuperusers(ctx context.Context, userID string) (int64, error)
 	LockUserLifecycle(ctx context.Context) error
-	DeactivateUser(ctx context.Context, userID string, deactivatedAt time.Time) error
+	DeactivateUser(ctx context.Context, userID, actorUserID, reason string, deactivatedAt time.Time) error
 	RevokeSessionsByUser(ctx context.Context, userID string) error
 	RevokeRefreshTokensByUser(ctx context.Context, userID string) error
 	ConsumeLoginChallengesByUser(ctx context.Context, userID string) error
 	ConsumePasswordResetTokensByUser(ctx context.Context, userID string) error
 	ConsumeEnrollmentTokensByUser(ctx context.Context, userID string) error
+	ConsumeRecoverySessionsByUser(ctx context.Context, userID string) error
+	GetTemporaryRestrictionsByUser(ctx context.Context, userID string) ([]TemporaryRestriction, error)
+	QueueEmail(ctx context.Context, message email.Message) error
 
 	// WithinTx runs fn with a Repository bound to a single database
 	// transaction, committing on nil and rolling back otherwise.

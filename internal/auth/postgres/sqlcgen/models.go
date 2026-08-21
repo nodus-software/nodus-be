@@ -53,6 +53,397 @@ func (ns NullAuditResult) Value() (driver.Value, error) {
 	return string(ns.AuditResult), nil
 }
 
+type AuthenticationMechanism string
+
+const (
+	AuthenticationMechanismPassword AuthenticationMechanism = "password"
+	AuthenticationMechanismMfa      AuthenticationMechanism = "mfa"
+	AuthenticationMechanismRecovery AuthenticationMechanism = "recovery"
+	AuthenticationMechanismCaptcha  AuthenticationMechanism = "captcha"
+)
+
+func (e *AuthenticationMechanism) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AuthenticationMechanism(s)
+	case string:
+		*e = AuthenticationMechanism(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AuthenticationMechanism: %T", src)
+	}
+	return nil
+}
+
+type NullAuthenticationMechanism struct {
+	AuthenticationMechanism AuthenticationMechanism `json:"authentication_mechanism"`
+	Valid                   bool                    `json:"valid"` // Valid is true if AuthenticationMechanism is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAuthenticationMechanism) Scan(value interface{}) error {
+	if value == nil {
+		ns.AuthenticationMechanism, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AuthenticationMechanism.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAuthenticationMechanism) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AuthenticationMechanism), nil
+}
+
+type CatalogueImportMode string
+
+const (
+	CatalogueImportModeCreateOnly CatalogueImportMode = "create_only"
+	CatalogueImportModeUpsert     CatalogueImportMode = "upsert"
+)
+
+func (e *CatalogueImportMode) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = CatalogueImportMode(s)
+	case string:
+		*e = CatalogueImportMode(s)
+	default:
+		return fmt.Errorf("unsupported scan type for CatalogueImportMode: %T", src)
+	}
+	return nil
+}
+
+type NullCatalogueImportMode struct {
+	CatalogueImportMode CatalogueImportMode `json:"catalogue_import_mode"`
+	Valid               bool                `json:"valid"` // Valid is true if CatalogueImportMode is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullCatalogueImportMode) Scan(value interface{}) error {
+	if value == nil {
+		ns.CatalogueImportMode, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.CatalogueImportMode.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullCatalogueImportMode) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.CatalogueImportMode), nil
+}
+
+type CatalogueImportStatus string
+
+const (
+	CatalogueImportStatusValidated CatalogueImportStatus = "validated"
+	CatalogueImportStatusCommitted CatalogueImportStatus = "committed"
+	CatalogueImportStatusExpired   CatalogueImportStatus = "expired"
+)
+
+func (e *CatalogueImportStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = CatalogueImportStatus(s)
+	case string:
+		*e = CatalogueImportStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for CatalogueImportStatus: %T", src)
+	}
+	return nil
+}
+
+type NullCatalogueImportStatus struct {
+	CatalogueImportStatus CatalogueImportStatus `json:"catalogue_import_status"`
+	Valid                 bool                  `json:"valid"` // Valid is true if CatalogueImportStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullCatalogueImportStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.CatalogueImportStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.CatalogueImportStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullCatalogueImportStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.CatalogueImportStatus), nil
+}
+
+type ClinicalCatalogueKind string
+
+const (
+	ClinicalCatalogueKindServices    ClinicalCatalogueKind = "services"
+	ClinicalCatalogueKindMedications ClinicalCatalogueKind = "medications"
+)
+
+func (e *ClinicalCatalogueKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ClinicalCatalogueKind(s)
+	case string:
+		*e = ClinicalCatalogueKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ClinicalCatalogueKind: %T", src)
+	}
+	return nil
+}
+
+type NullClinicalCatalogueKind struct {
+	ClinicalCatalogueKind ClinicalCatalogueKind `json:"clinical_catalogue_kind"`
+	Valid                 bool                  `json:"valid"` // Valid is true if ClinicalCatalogueKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullClinicalCatalogueKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.ClinicalCatalogueKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ClinicalCatalogueKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullClinicalCatalogueKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ClinicalCatalogueKind), nil
+}
+
+type ClinicalEncounterStatus string
+
+const (
+	ClinicalEncounterStatusPlanned    ClinicalEncounterStatus = "planned"
+	ClinicalEncounterStatusInProgress ClinicalEncounterStatus = "in_progress"
+	ClinicalEncounterStatusCompleted  ClinicalEncounterStatus = "completed"
+	ClinicalEncounterStatusCancelled  ClinicalEncounterStatus = "cancelled"
+)
+
+func (e *ClinicalEncounterStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ClinicalEncounterStatus(s)
+	case string:
+		*e = ClinicalEncounterStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ClinicalEncounterStatus: %T", src)
+	}
+	return nil
+}
+
+type NullClinicalEncounterStatus struct {
+	ClinicalEncounterStatus ClinicalEncounterStatus `json:"clinical_encounter_status"`
+	Valid                   bool                    `json:"valid"` // Valid is true if ClinicalEncounterStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullClinicalEncounterStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.ClinicalEncounterStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ClinicalEncounterStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullClinicalEncounterStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ClinicalEncounterStatus), nil
+}
+
+type ClinicalEncounterType string
+
+const (
+	ClinicalEncounterTypeTriage       ClinicalEncounterType = "triage"
+	ClinicalEncounterTypeConsultation ClinicalEncounterType = "consultation"
+	ClinicalEncounterTypeWardRound    ClinicalEncounterType = "ward_round"
+	ClinicalEncounterTypeNursing      ClinicalEncounterType = "nursing"
+	ClinicalEncounterTypeOther        ClinicalEncounterType = "other"
+)
+
+func (e *ClinicalEncounterType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ClinicalEncounterType(s)
+	case string:
+		*e = ClinicalEncounterType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ClinicalEncounterType: %T", src)
+	}
+	return nil
+}
+
+type NullClinicalEncounterType struct {
+	ClinicalEncounterType ClinicalEncounterType `json:"clinical_encounter_type"`
+	Valid                 bool                  `json:"valid"` // Valid is true if ClinicalEncounterType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullClinicalEncounterType) Scan(value interface{}) error {
+	if value == nil {
+		ns.ClinicalEncounterType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ClinicalEncounterType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullClinicalEncounterType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ClinicalEncounterType), nil
+}
+
+type ClinicalVisitStatus string
+
+const (
+	ClinicalVisitStatusPlanned   ClinicalVisitStatus = "planned"
+	ClinicalVisitStatusActive    ClinicalVisitStatus = "active"
+	ClinicalVisitStatusCompleted ClinicalVisitStatus = "completed"
+	ClinicalVisitStatusCancelled ClinicalVisitStatus = "cancelled"
+)
+
+func (e *ClinicalVisitStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ClinicalVisitStatus(s)
+	case string:
+		*e = ClinicalVisitStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ClinicalVisitStatus: %T", src)
+	}
+	return nil
+}
+
+type NullClinicalVisitStatus struct {
+	ClinicalVisitStatus ClinicalVisitStatus `json:"clinical_visit_status"`
+	Valid               bool                `json:"valid"` // Valid is true if ClinicalVisitStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullClinicalVisitStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.ClinicalVisitStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ClinicalVisitStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullClinicalVisitStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ClinicalVisitStatus), nil
+}
+
+type ClinicalVisitType string
+
+const (
+	ClinicalVisitTypeTest       ClinicalVisitType = "test"
+	ClinicalVisitTypeOutpatient ClinicalVisitType = "outpatient"
+	ClinicalVisitTypeEmergency  ClinicalVisitType = "emergency"
+	ClinicalVisitTypeSpecialty  ClinicalVisitType = "specialty"
+)
+
+func (e *ClinicalVisitType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ClinicalVisitType(s)
+	case string:
+		*e = ClinicalVisitType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ClinicalVisitType: %T", src)
+	}
+	return nil
+}
+
+type NullClinicalVisitType struct {
+	ClinicalVisitType ClinicalVisitType `json:"clinical_visit_type"`
+	Valid             bool              `json:"valid"` // Valid is true if ClinicalVisitType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullClinicalVisitType) Scan(value interface{}) error {
+	if value == nil {
+		ns.ClinicalVisitType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ClinicalVisitType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullClinicalVisitType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ClinicalVisitType), nil
+}
+
+type DiagnosisKind string
+
+const (
+	DiagnosisKindProvisional DiagnosisKind = "provisional"
+	DiagnosisKindFinal       DiagnosisKind = "final"
+	DiagnosisKindSecondary   DiagnosisKind = "secondary"
+)
+
+func (e *DiagnosisKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = DiagnosisKind(s)
+	case string:
+		*e = DiagnosisKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for DiagnosisKind: %T", src)
+	}
+	return nil
+}
+
+type NullDiagnosisKind struct {
+	DiagnosisKind DiagnosisKind `json:"diagnosis_kind"`
+	Valid         bool          `json:"valid"` // Valid is true if DiagnosisKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullDiagnosisKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.DiagnosisKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.DiagnosisKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullDiagnosisKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.DiagnosisKind), nil
+}
+
 type MfaFactorType string
 
 const (
@@ -136,6 +527,50 @@ func (ns NullOrganizationStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.OrganizationStatus), nil
+}
+
+type OutboxStatus string
+
+const (
+	OutboxStatusPending    OutboxStatus = "pending"
+	OutboxStatusProcessing OutboxStatus = "processing"
+	OutboxStatusProcessed  OutboxStatus = "processed"
+	OutboxStatusFailed     OutboxStatus = "failed"
+)
+
+func (e *OutboxStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = OutboxStatus(s)
+	case string:
+		*e = OutboxStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for OutboxStatus: %T", src)
+	}
+	return nil
+}
+
+type NullOutboxStatus struct {
+	OutboxStatus OutboxStatus `json:"outbox_status"`
+	Valid        bool         `json:"valid"` // Valid is true if OutboxStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullOutboxStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.OutboxStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.OutboxStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullOutboxStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.OutboxStatus), nil
 }
 
 type PatientCorrectionStatus string
@@ -267,6 +702,140 @@ func (ns NullPatientStatus) Value() (driver.Value, error) {
 	return string(ns.PatientStatus), nil
 }
 
+type QueueEntryStatus string
+
+const (
+	QueueEntryStatusWaiting     QueueEntryStatus = "waiting"
+	QueueEntryStatusCalled      QueueEntryStatus = "called"
+	QueueEntryStatusInService   QueueEntryStatus = "in_service"
+	QueueEntryStatusPaused      QueueEntryStatus = "paused"
+	QueueEntryStatusTransferred QueueEntryStatus = "transferred"
+	QueueEntryStatusCompleted   QueueEntryStatus = "completed"
+	QueueEntryStatusCancelled   QueueEntryStatus = "cancelled"
+	QueueEntryStatusNoShow      QueueEntryStatus = "no_show"
+)
+
+func (e *QueueEntryStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = QueueEntryStatus(s)
+	case string:
+		*e = QueueEntryStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for QueueEntryStatus: %T", src)
+	}
+	return nil
+}
+
+type NullQueueEntryStatus struct {
+	QueueEntryStatus QueueEntryStatus `json:"queue_entry_status"`
+	Valid            bool             `json:"valid"` // Valid is true if QueueEntryStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullQueueEntryStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.QueueEntryStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.QueueEntryStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullQueueEntryStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.QueueEntryStatus), nil
+}
+
+type QueueSubjectType string
+
+const (
+	QueueSubjectTypeVisit     QueueSubjectType = "visit"
+	QueueSubjectTypeAdmission QueueSubjectType = "admission"
+	QueueSubjectTypeOrder     QueueSubjectType = "order"
+)
+
+func (e *QueueSubjectType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = QueueSubjectType(s)
+	case string:
+		*e = QueueSubjectType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for QueueSubjectType: %T", src)
+	}
+	return nil
+}
+
+type NullQueueSubjectType struct {
+	QueueSubjectType QueueSubjectType `json:"queue_subject_type"`
+	Valid            bool             `json:"valid"` // Valid is true if QueueSubjectType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullQueueSubjectType) Scan(value interface{}) error {
+	if value == nil {
+		ns.QueueSubjectType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.QueueSubjectType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullQueueSubjectType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.QueueSubjectType), nil
+}
+
+type RecoveryIntent string
+
+const (
+	RecoveryIntentPassword RecoveryIntent = "password"
+	RecoveryIntentMfa      RecoveryIntent = "mfa"
+	RecoveryIntentBoth     RecoveryIntent = "both"
+)
+
+func (e *RecoveryIntent) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = RecoveryIntent(s)
+	case string:
+		*e = RecoveryIntent(s)
+	default:
+		return fmt.Errorf("unsupported scan type for RecoveryIntent: %T", src)
+	}
+	return nil
+}
+
+type NullRecoveryIntent struct {
+	RecoveryIntent RecoveryIntent `json:"recovery_intent"`
+	Valid          bool           `json:"valid"` // Valid is true if RecoveryIntent is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullRecoveryIntent) Scan(value interface{}) error {
+	if value == nil {
+		ns.RecoveryIntent, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.RecoveryIntent.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullRecoveryIntent) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.RecoveryIntent), nil
+}
+
 type UserStatus string
 
 const (
@@ -354,17 +923,342 @@ func (ns NullWebauthnCeremonyPurpose) Value() (driver.Value, error) {
 	return string(ns.WebauthnCeremonyPurpose), nil
 }
 
+type AdministrationRoute struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AllergenCatalogue struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Category  string             `json:"category"`
+	Aliases   []string           `json:"aliases"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AuditLog struct {
-	ID             string             `json:"id"`
-	Timestamp      pgtype.Timestamptz `json:"timestamp"`
-	UserID         *string            `json:"user_id"`
-	Action         string             `json:"action"`
-	TargetResource string             `json:"target_resource"`
-	IpAddress      string             `json:"ip_address"`
-	Result         AuditResult        `json:"result"`
-	Metadata       []byte             `json:"metadata"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	TenantID       string             `json:"tenant_id"`
+	ID                  string             `json:"id"`
+	Timestamp           pgtype.Timestamptz `json:"timestamp"`
+	UserID              *string            `json:"user_id"`
+	Action              string             `json:"action"`
+	TargetResource      string             `json:"target_resource"`
+	IpAddress           string             `json:"ip_address"`
+	Result              AuditResult        `json:"result"`
+	Metadata            []byte             `json:"metadata"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	TenantID            string             `json:"tenant_id"`
+	TargetUserID        *string            `json:"target_user_id"`
+	RequestID           string             `json:"request_id"`
+	UserAgent           string             `json:"user_agent"`
+	ReasonCode          string             `json:"reason_code"`
+	PrivilegedReference string             `json:"privileged_reference"`
+}
+
+type AuthenticationFailureState struct {
+	TenantID         string                  `json:"tenant_id"`
+	UserID           string                  `json:"user_id"`
+	Mechanism        AuthenticationMechanism `json:"mechanism"`
+	FailureCount     int32                   `json:"failure_count"`
+	WindowStartedAt  pgtype.Timestamptz      `json:"window_started_at"`
+	LastFailureAt    pgtype.Timestamptz      `json:"last_failure_at"`
+	NextAttemptAt    pgtype.Timestamptz      `json:"next_attempt_at"`
+	LockedUntil      pgtype.Timestamptz      `json:"locked_until"`
+	LockCycleCount   int32                   `json:"lock_cycle_count"`
+	CycleWindowStart pgtype.Timestamptz      `json:"cycle_window_start"`
+	CreatedAt        pgtype.Timestamptz      `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz      `json:"updated_at"`
+}
+
+type Bed struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	WardID    string             `json:"ward_id"`
+	RoomID    *string            `json:"room_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Status    string             `json:"status"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CatalogueImport struct {
+	ID           string                `json:"id"`
+	TenantID     string                `json:"tenant_id"`
+	Catalogue    ClinicalCatalogueKind `json:"catalogue"`
+	Mode         CatalogueImportMode   `json:"mode"`
+	Status       CatalogueImportStatus `json:"status"`
+	FileName     string                `json:"file_name"`
+	FileChecksum string                `json:"file_checksum"`
+	Rows         []byte                `json:"rows"`
+	Summary      []byte                `json:"summary"`
+	CreatedBy    string                `json:"created_by"`
+	ExpiresAt    pgtype.Timestamptz    `json:"expires_at"`
+	CommittedAt  pgtype.Timestamptz    `json:"committed_at"`
+	CreatedAt    pgtype.Timestamptz    `json:"created_at"`
+}
+
+type CatalogueReferenceRelease struct {
+	ID            string                `json:"id"`
+	Catalogue     ClinicalCatalogueKind `json:"catalogue"`
+	SourceSystem  string                `json:"source_system"`
+	Version       string                `json:"version"`
+	Title         string                `json:"title"`
+	ReleasedOn    pgtype.Date           `json:"released_on"`
+	ProvenanceUrl *string               `json:"provenance_url"`
+	Checksum      string                `json:"checksum"`
+	Active        bool                  `json:"active"`
+	ImportedAt    pgtype.Timestamptz    `json:"imported_at"`
+}
+
+type ClinicalAllergy struct {
+	ID         string             `json:"id"`
+	TenantID   string             `json:"tenant_id"`
+	PatientID  string             `json:"patient_id"`
+	Allergen   string             `json:"allergen"`
+	Reaction   *string            `json:"reaction"`
+	Severity   *string            `json:"severity"`
+	Status     string             `json:"status"`
+	RecordedBy string             `json:"recorded_by"`
+	RecordedAt pgtype.Timestamptz `json:"recorded_at"`
+	AllergenID *string            `json:"allergen_id"`
+}
+
+type ClinicalDiagnosis struct {
+	ID          string             `json:"id"`
+	TenantID    string             `json:"tenant_id"`
+	PatientID   string             `json:"patient_id"`
+	VisitID     string             `json:"visit_id"`
+	EncounterID *string            `json:"encounter_id"`
+	ConceptID   string             `json:"concept_id"`
+	Kind        DiagnosisKind      `json:"kind"`
+	Note        *string            `json:"note"`
+	RecordedBy  string             `json:"recorded_by"`
+	RecordedAt  pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type ClinicalEncounter struct {
+	ID             string                  `json:"id"`
+	TenantID       string                  `json:"tenant_id"`
+	VisitID        string                  `json:"visit_id"`
+	ServicePointID *string                 `json:"service_point_id"`
+	EncounterType  ClinicalEncounterType   `json:"encounter_type"`
+	Status         ClinicalEncounterStatus `json:"status"`
+	ClinicianID    *string                 `json:"clinician_id"`
+	StartedAt      pgtype.Timestamptz      `json:"started_at"`
+	EndedAt        pgtype.Timestamptz      `json:"ended_at"`
+	CreatedAt      pgtype.Timestamptz      `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz      `json:"updated_at"`
+}
+
+type ClinicalEncounterForm struct {
+	ID                string             `json:"id"`
+	TenantID          string             `json:"tenant_id"`
+	EncounterID       string             `json:"encounter_id"`
+	TemplateVersionID string             `json:"template_version_id"`
+	Status            string             `json:"status"`
+	Answers           []byte             `json:"answers"`
+	Revision          int32              `json:"revision"`
+	SavedBy           *string            `json:"saved_by"`
+	SubmittedBy       *string            `json:"submitted_by"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	SubmittedAt       pgtype.Timestamptz `json:"submitted_at"`
+}
+
+type ClinicalMedicationOrderDetail struct {
+	OrderID               string             `json:"order_id"`
+	TenantID              string             `json:"tenant_id"`
+	MedicationID          string             `json:"medication_id"`
+	MedicationCode        string             `json:"medication_code"`
+	MedicationName        string             `json:"medication_name"`
+	Dose                  pgtype.Numeric     `json:"dose"`
+	DoseUnit              string             `json:"dose_unit"`
+	Route                 string             `json:"route"`
+	Frequency             string             `json:"frequency"`
+	DurationDays          *int32             `json:"duration_days"`
+	Quantity              pgtype.Numeric     `json:"quantity"`
+	Instructions          *string            `json:"instructions"`
+	AllergyOverrideReason *string            `json:"allergy_override_reason"`
+	AllergyAcknowledgedAt pgtype.Timestamptz `json:"allergy_acknowledged_at"`
+}
+
+type ClinicalNote struct {
+	ID            string             `json:"id"`
+	TenantID      string             `json:"tenant_id"`
+	PatientID     string             `json:"patient_id"`
+	VisitID       string             `json:"visit_id"`
+	EncounterID   *string            `json:"encounter_id"`
+	NoteType      string             `json:"note_type"`
+	Body          string             `json:"body"`
+	AuthoredBy    string             `json:"authored_by"`
+	AuthoredAt    pgtype.Timestamptz `json:"authored_at"`
+	AmendedFromID *string            `json:"amended_from_id"`
+}
+
+type ClinicalObservation struct {
+	ID                 string             `json:"id"`
+	TenantID           string             `json:"tenant_id"`
+	PatientID          string             `json:"patient_id"`
+	VisitID            string             `json:"visit_id"`
+	EncounterID        *string            `json:"encounter_id"`
+	Code               string             `json:"code"`
+	ValueNumeric       pgtype.Numeric     `json:"value_numeric"`
+	ValueText          *string            `json:"value_text"`
+	Unit               *string            `json:"unit"`
+	ObservedAt         pgtype.Timestamptz `json:"observed_at"`
+	RecordedBy         string             `json:"recorded_by"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	SourceFormID       *string            `json:"source_form_id"`
+	SourceFormFieldKey *string            `json:"source_form_field_key"`
+}
+
+type ClinicalOrder struct {
+	ID               string             `json:"id"`
+	TenantID         string             `json:"tenant_id"`
+	PatientID        string             `json:"patient_id"`
+	VisitID          string             `json:"visit_id"`
+	EncounterID      string             `json:"encounter_id"`
+	Kind             string             `json:"kind"`
+	Category         string             `json:"category"`
+	Priority         int16              `json:"priority"`
+	Status           string             `json:"status"`
+	ReviewRequired   bool               `json:"review_required"`
+	OrderedBy        string             `json:"ordered_by"`
+	OrderedAt        pgtype.Timestamptz `json:"ordered_at"`
+	CompletedAt      pgtype.Timestamptz `json:"completed_at"`
+	CancelledAt      pgtype.Timestamptz `json:"cancelled_at"`
+	TransitionReason *string            `json:"transition_reason"`
+	Version          int32              `json:"version"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ClinicalOutbox struct {
+	ID            string             `json:"id"`
+	TenantID      string             `json:"tenant_id"`
+	EventType     string             `json:"event_type"`
+	AggregateType string             `json:"aggregate_type"`
+	AggregateID   string             `json:"aggregate_id"`
+	Payload       []byte             `json:"payload"`
+	Status        OutboxStatus       `json:"status"`
+	Attempts      int32              `json:"attempts"`
+	AvailableAt   pgtype.Timestamptz `json:"available_at"`
+	ProcessedAt   pgtype.Timestamptz `json:"processed_at"`
+	LastError     *string            `json:"last_error"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type ClinicalService struct {
+	ID                       string             `json:"id"`
+	TenantID                 string             `json:"tenant_id"`
+	ReferenceItemID          *string            `json:"reference_item_id"`
+	Code                     string             `json:"code"`
+	Name                     string             `json:"name"`
+	Category                 string             `json:"category"`
+	DepartmentID             *string            `json:"department_id"`
+	ServicePointID           *string            `json:"service_point_id"`
+	PriceMinor               *int64             `json:"price_minor"`
+	Currency                 string             `json:"currency"`
+	RequiresOrder            bool               `json:"requires_order"`
+	RequiresResult           bool               `json:"requires_result"`
+	EstimatedDurationMinutes *int32             `json:"estimated_duration_minutes"`
+	Active                   bool               `json:"active"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ClinicalServiceOrderDetail struct {
+	OrderID     string `json:"order_id"`
+	TenantID    string `json:"tenant_id"`
+	ServiceID   string `json:"service_id"`
+	ServiceCode string `json:"service_code"`
+	ServiceName string `json:"service_name"`
+}
+
+type ClinicalTemplate struct {
+	ID            string                `json:"id"`
+	TenantID      string                `json:"tenant_id"`
+	Code          string                `json:"code"`
+	Name          string                `json:"name"`
+	Description   *string               `json:"description"`
+	EncounterType ClinicalEncounterType `json:"encounter_type"`
+	IsDefault     bool                  `json:"is_default"`
+	ArchivedAt    pgtype.Timestamptz    `json:"archived_at"`
+	CreatedBy     *string               `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz    `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz    `json:"updated_at"`
+}
+
+type ClinicalTemplateVersion struct {
+	ID          string             `json:"id"`
+	TenantID    string             `json:"tenant_id"`
+	TemplateID  string             `json:"template_id"`
+	Version     int32              `json:"version"`
+	Status      string             `json:"status"`
+	Definition  []byte             `json:"definition"`
+	CreatedBy   *string            `json:"created_by"`
+	PublishedBy *string            `json:"published_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+}
+
+type ClinicalVisit struct {
+	ID             string              `json:"id"`
+	TenantID       string              `json:"tenant_id"`
+	PatientID      string              `json:"patient_id"`
+	VisitType      ClinicalVisitType   `json:"visit_type"`
+	Status         ClinicalVisitStatus `json:"status"`
+	Reason         *string             `json:"reason"`
+	StartedAt      pgtype.Timestamptz  `json:"started_at"`
+	EndedAt        pgtype.Timestamptz  `json:"ended_at"`
+	CreatedBy      string              `json:"created_by"`
+	CreatedAt      pgtype.Timestamptz  `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz  `json:"updated_at"`
+	ServicePointID *string             `json:"service_point_id"`
+}
+
+type Department struct {
+	ID          string             `json:"id"`
+	TenantID    string             `json:"tenant_id"`
+	Code        string             `json:"code"`
+	Name        string             `json:"name"`
+	Description *string            `json:"description"`
+	Active      bool               `json:"active"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Global operational queue. It intentionally has no tenant RLS because workers claim mail across all tenants; no HTTP endpoint exposes it.
+type EmailOutbox struct {
+	ID                string             `json:"id"`
+	TenantID          *string            `json:"tenant_id"`
+	Kind              string             `json:"kind"`
+	Recipient         *string            `json:"recipient"`
+	RecipientHash     string             `json:"recipient_hash"`
+	Subject           *string            `json:"subject"`
+	TextBody          *string            `json:"text_body"`
+	HtmlBody          *string            `json:"html_body"`
+	Status            string             `json:"status"`
+	AttemptCount      int32              `json:"attempt_count"`
+	NextAttemptAt     pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseUntil        pgtype.Timestamptz `json:"lease_until"`
+	LastProvider      *string            `json:"last_provider"`
+	ProviderMessageID *string            `json:"provider_message_id"`
+	LastError         *string            `json:"last_error"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	SentAt            pgtype.Timestamptz `json:"sent_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	DedupeKey         *string            `json:"dedupe_key"`
 }
 
 type EnrollmentToken struct {
@@ -396,6 +1290,48 @@ type LoginChallenge struct {
 	ConsumedAt         pgtype.Timestamptz `json:"consumed_at"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	TenantID           string             `json:"tenant_id"`
+}
+
+type MedicationCatalogue struct {
+	ID                   string             `json:"id"`
+	TenantID             string             `json:"tenant_id"`
+	ReferenceItemID      *string            `json:"reference_item_id"`
+	Code                 string             `json:"code"`
+	GenericName          string             `json:"generic_name"`
+	BrandName            *string            `json:"brand_name"`
+	Strength             *string            `json:"strength"`
+	DosageForm           *string            `json:"dosage_form"`
+	Route                *string            `json:"route"`
+	PackSize             *string            `json:"pack_size"`
+	UnitOfMeasure        *string            `json:"unit_of_measure"`
+	PrescriptionRequired bool               `json:"prescription_required"`
+	Active               bool               `json:"active"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MedicationDosageForm struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MedicationReferenceItem struct {
+	ID             string  `json:"id"`
+	ReleaseID      string  `json:"release_id"`
+	SourceCode     string  `json:"source_code"`
+	GenericName    string  `json:"generic_name"`
+	Strength       *string `json:"strength"`
+	DosageForm     *string `json:"dosage_form"`
+	Route          *string `json:"route"`
+	StandardSystem *string `json:"standard_system"`
+	StandardCode   *string `json:"standard_code"`
+	SearchableText string  `json:"searchable_text"`
+	Active         bool    `json:"active"`
 }
 
 type MfaBackupCode struct {
@@ -444,6 +1380,22 @@ type OrganizationActivationToken struct {
 	ID        string             `json:"id"`
 	TenantID  string             `json:"tenant_id"`
 	UserID    string             `json:"user_id"`
+	TokenHash string             `json:"token_hash"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type OrganizationDiscoveryRequest struct {
+	ID        string             `json:"id"`
+	EmailHash string             `json:"email_hash"`
+	IpAddress string             `json:"ip_address"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type OrganizationDiscoveryToken struct {
+	ID        string             `json:"id"`
+	Email     string             `json:"email"`
 	TokenHash string             `json:"token_hash"`
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
@@ -549,6 +1501,74 @@ type Permission struct {
 	Description string `json:"description"`
 }
 
+type PrescriptionFrequency struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Queue struct {
+	ID             string             `json:"id"`
+	TenantID       string             `json:"tenant_id"`
+	ServicePointID string             `json:"service_point_id"`
+	Code           string             `json:"code"`
+	Name           string             `json:"name"`
+	Active         bool               `json:"active"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type QueueEntry struct {
+	ID               string             `json:"id"`
+	TenantID         string             `json:"tenant_id"`
+	QueueID          string             `json:"queue_id"`
+	SubjectType      QueueSubjectType   `json:"subject_type"`
+	SubjectID        string             `json:"subject_id"`
+	PatientID        string             `json:"patient_id"`
+	Status           QueueEntryStatus   `json:"status"`
+	Priority         int16              `json:"priority"`
+	Acuity           *int16             `json:"acuity"`
+	PositionOverride *int32             `json:"position_override"`
+	JoinedAt         pgtype.Timestamptz `json:"joined_at"`
+	CalledAt         pgtype.Timestamptz `json:"called_at"`
+	ServiceStartedAt pgtype.Timestamptz `json:"service_started_at"`
+	CompletedAt      pgtype.Timestamptz `json:"completed_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type QueueEntryHistory struct {
+	ID           string             `json:"id"`
+	TenantID     string             `json:"tenant_id"`
+	QueueEntryID string             `json:"queue_entry_id"`
+	FromStatus   *QueueEntryStatus  `json:"from_status"`
+	ToStatus     QueueEntryStatus   `json:"to_status"`
+	FromQueueID  *string            `json:"from_queue_id"`
+	ToQueueID    string             `json:"to_queue_id"`
+	ActorID      *string            `json:"actor_id"`
+	Reason       *string            `json:"reason"`
+	Automated    bool               `json:"automated"`
+	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type QueueRoutingRule struct {
+	ID              string                 `json:"id"`
+	TenantID        string                 `json:"tenant_id"`
+	Name            string                 `json:"name"`
+	EventType       string                 `json:"event_type"`
+	VisitType       *ClinicalVisitType     `json:"visit_type"`
+	TargetQueueID   string                 `json:"target_queue_id"`
+	Priority        int16                  `json:"priority"`
+	Active          bool                   `json:"active"`
+	CreatedAt       pgtype.Timestamptz     `json:"created_at"`
+	EncounterType   *ClinicalEncounterType `json:"encounter_type"`
+	OrderKind       *string                `json:"order_kind"`
+	ServiceCategory *string                `json:"service_category"`
+}
+
 type ReactivationToken struct {
 	ID          string             `json:"id"`
 	TenantID    string             `json:"tenant_id"`
@@ -558,6 +1578,32 @@ type ReactivationToken struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	UsedAt      pgtype.Timestamptz `json:"used_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type RecoveryEmailToken struct {
+	ID         string             `json:"id"`
+	TenantID   string             `json:"tenant_id"`
+	UserID     string             `json:"user_id"`
+	Intent     RecoveryIntent     `json:"intent"`
+	TokenHash  string             `json:"token_hash"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type RecoverySession struct {
+	ID                  string             `json:"id"`
+	TenantID            string             `json:"tenant_id"`
+	UserID              string             `json:"user_id"`
+	TokenHash           string             `json:"token_hash"`
+	CanResetPassword    bool               `json:"can_reset_password"`
+	CanReplaceMfa       bool               `json:"can_replace_mfa"`
+	PasswordCompletedAt pgtype.Timestamptz `json:"password_completed_at"`
+	MfaCompletedAt      pgtype.Timestamptz `json:"mfa_completed_at"`
+	FailedAttempts      int32              `json:"failed_attempts"`
+	ExpiresAt           pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt          pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
 type RefreshToken struct {
@@ -588,6 +1634,41 @@ type RolePermission struct {
 	TenantID     string `json:"tenant_id"`
 }
 
+type Room struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	WardID    string             `json:"ward_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ServicePoint struct {
+	ID           string             `json:"id"`
+	TenantID     string             `json:"tenant_id"`
+	DepartmentID string             `json:"department_id"`
+	Code         string             `json:"code"`
+	Name         string             `json:"name"`
+	Kind         string             `json:"kind"`
+	Active       bool               `json:"active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ServiceReferenceItem struct {
+	ID             string  `json:"id"`
+	ReleaseID      string  `json:"release_id"`
+	SourceCode     string  `json:"source_code"`
+	Name           string  `json:"name"`
+	Category       string  `json:"category"`
+	StandardSystem *string `json:"standard_system"`
+	StandardCode   *string `json:"standard_code"`
+	SearchableText string  `json:"searchable_text"`
+	Active         bool    `json:"active"`
+}
+
 type Session struct {
 	ID           string             `json:"id"`
 	UserID       string             `json:"user_id"`
@@ -599,6 +1680,82 @@ type Session struct {
 	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
 	TenantID     string             `json:"tenant_id"`
 	RememberMe   bool               `json:"remember_me"`
+}
+
+type SpecimenType struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TenantTerminologyOverride struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	ConceptID string             `json:"concept_id"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TerminologyConcept struct {
+	ID                string  `json:"id"`
+	ReleaseID         string  `json:"release_id"`
+	Code              string  `json:"code"`
+	Display           string  `json:"display"`
+	SearchableText    string  `json:"searchable_text"`
+	Active            bool    `json:"active"`
+	FoundationUri     *string `json:"foundation_uri"`
+	LinearizationUri  *string `json:"linearization_uri"`
+	SourceTitle       *string `json:"source_title"`
+	ChapterNo         *string `json:"chapter_no"`
+	ParentUri         *string `json:"parent_uri"`
+	ClassKind         *string `json:"class_kind"`
+	IsLeaf            bool    `json:"is_leaf"`
+	IsResidual        bool    `json:"is_residual"`
+	PrimaryTabulation bool    `json:"primary_tabulation"`
+}
+
+type TerminologyImportRun struct {
+	ID             string             `json:"id"`
+	System         string             `json:"system"`
+	Version        *string            `json:"version"`
+	SourceFile     string             `json:"source_file"`
+	SourceChecksum string             `json:"source_checksum"`
+	Status         string             `json:"status"`
+	TotalRows      int32              `json:"total_rows"`
+	ImportedRows   int32              `json:"imported_rows"`
+	ErrorMessage   *string            `json:"error_message"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+}
+
+type TerminologyRelease struct {
+	ID             string             `json:"id"`
+	System         string             `json:"system"`
+	Version        string             `json:"version"`
+	Title          string             `json:"title"`
+	ReleasedOn     pgtype.Date        `json:"released_on"`
+	Active         bool               `json:"active"`
+	ImportedAt     pgtype.Timestamptz `json:"imported_at"`
+	Language       string             `json:"language"`
+	Linearization  *string            `json:"linearization"`
+	SourceChecksum *string            `json:"source_checksum"`
+	SourceFile     *string            `json:"source_file"`
+	Attribution    *string            `json:"attribution"`
+}
+
+type UnitsOfMeasure struct {
+	ID        string             `json:"id"`
+	TenantID  string             `json:"tenant_id"`
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Active    bool               `json:"active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type User struct {
@@ -618,6 +1775,11 @@ type User struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	TenantID            string             `json:"tenant_id"`
 	DeactivatedAt       pgtype.Timestamptz `json:"deactivated_at"`
+	SuspendedAt         pgtype.Timestamptz `json:"suspended_at"`
+	SuspendedBy         *string            `json:"suspended_by"`
+	SuspensionReason    *string            `json:"suspension_reason"`
+	DeactivatedBy       *string            `json:"deactivated_by"`
+	DeactivationReason  *string            `json:"deactivation_reason"`
 }
 
 type UserRole struct {
@@ -625,6 +1787,17 @@ type UserRole struct {
 	RoleID     string             `json:"role_id"`
 	AssignedAt pgtype.Timestamptz `json:"assigned_at"`
 	TenantID   string             `json:"tenant_id"`
+}
+
+type Ward struct {
+	ID           string             `json:"id"`
+	TenantID     string             `json:"tenant_id"`
+	DepartmentID string             `json:"department_id"`
+	Code         string             `json:"code"`
+	Name         string             `json:"name"`
+	Active       bool               `json:"active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WebauthnCeremony struct {

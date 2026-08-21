@@ -14,13 +14,18 @@ const (
 // changes, etc.) is recorded as an Entry. There is no update or delete path
 // for these records anywhere in the codebase.
 type Entry struct {
-	ID             string
-	TenantID       string
-	Timestamp      time.Time
-	UserID         *string // nil when the actor is unknown/unauthenticated (e.g. a reset request for a non-existent username)
-	Action         string
-	TargetResource string
-	IPAddress      string
-	Result         Result
-	Metadata       map[string]any
+	ID                  string
+	TenantID            string
+	Timestamp           time.Time
+	UserID              *string // nil when the actor is unknown/unauthenticated (e.g. a reset request for a non-existent username)
+	TargetUserID        *string
+	Action              string
+	TargetResource      string
+	IPAddress           string
+	RequestID           string
+	UserAgent           string
+	ReasonCode          string
+	PrivilegedReference string
+	Result              Result
+	Metadata            map[string]any
 }

@@ -17,6 +17,13 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/auth/password/policy", h.GetPasswordPolicy)
 	r.Post("/auth/password/reset/request", h.RequestPasswordReset)
 	r.Post("/auth/password/reset/confirm", h.ConfirmPasswordReset)
+	r.Post("/auth/recovery/request", h.RequestRecovery)
+	r.Post("/auth/recovery/verify", h.VerifyRecovery)
+	r.Post("/auth/recovery/password", h.RecoveryPassword)
+	r.Post("/auth/recovery/mfa/totp/setup", h.RecoveryTOTPSetup)
+	r.Post("/auth/recovery/mfa/totp/confirm", h.RecoveryTOTPConfirm)
+	r.Post("/auth/recovery/mfa/webauthn/register/options", h.RecoveryWebAuthnOptions)
+	r.Post("/auth/recovery/mfa/webauthn/register/verify", h.RecoveryWebAuthnVerify)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AuthenticateSessionOrEnrollment(h.jwtSecret, h.service, h.service))

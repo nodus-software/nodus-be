@@ -66,6 +66,10 @@ type discardAudit struct{}
 func (discardAudit) Record(context.Context, audit.Entry) error { return nil }
 
 func Setup(t *testing.T) *Env {
+	return setupWithSecurity(t, "observation", auth.SecurityControls{})
+}
+
+func setupWithSecurity(t *testing.T, mode string, controls auth.SecurityControls) *Env {
 	t.Helper()
 	cfg := TestConfig{BaseUrl: "https://app.test", PasswordMinLength: 12, LockoutMaxAttempts: 3, PasswordResetMaxPerUsernamePerHour: 3}
 	var encryptionKey [32]byte
@@ -81,7 +85,8 @@ func Setup(t *testing.T) *Env {
 		MFABackupCodeCount: 3, MFAEncryptionKey: encryptionKey, LockoutMaxAttempts: cfg.LockoutMaxAttempts,
 		LockoutDuration: time.Hour, PasswordResetMaxPerUsernamePerHour: cfg.PasswordResetMaxPerUsernamePerHour,
 		PasswordResetMaxPerIPPerHour: 100, PasswordPolicy: auth.PasswordPolicy{MinLength: cfg.PasswordMinLength, RequireUppercase: true, RequireNumber: true, RequireSymbol: true, RejectCommonPasswords: true},
-	})
+		SecurityMode: mode, FailurePolicy: auth.FailurePolicy{ObservationWindow: 15 * time.Minute, CycleWindow: 24 * time.Hour, LockThreshold: 10, InitialLock: 15 * time.Minute, MaximumLock: time.Hour},
+	}, controls)
 	r := chi.NewRouter()
 	auth.NewHandler(service, "test-jwt-secret", logger.NewLogger()).RegisterRoutes(r)
 	return &Env{Cfg: cfg, Router: r, Repo: repo, Mailer: mailer}
@@ -270,11 +275,14 @@ type memoryRepo struct {
 	enrollments         map[string]enrollmentToken
 	webauthnCredentials map[string]auth.WebAuthnCredential
 	webauthnCeremonies  map[string]auth.WebAuthnCeremony
+	failureStates       map[string]auth.AuthenticationFailureState
+	recoveryEmails      map[string]auth.RecoveryEmailToken
+	recoverySessions    map[string]auth.RecoverySession
 	key                 [32]byte
 }
 
 func newMemoryRepo() *memoryRepo {
-	r := &memoryRepo{users: map[string]auth.User{}, challenges: map[string]auth.LoginChallenge{}, sessions: map[string]auth.Session{}, refresh: map[string]auth.RefreshToken{}, resets: map[string]auth.PasswordResetToken{}, factors: map[string]auth.MFAFactor{}, backup: map[string]backupCode{}, roles: map[string][]auth.Role{}, permissions: map[string][]string{}, enrollments: map[string]enrollmentToken{}, webauthnCredentials: map[string]auth.WebAuthnCredential{}, webauthnCeremonies: map[string]auth.WebAuthnCeremony{}}
+	r := &memoryRepo{users: map[string]auth.User{}, challenges: map[string]auth.LoginChallenge{}, sessions: map[string]auth.Session{}, refresh: map[string]auth.RefreshToken{}, resets: map[string]auth.PasswordResetToken{}, factors: map[string]auth.MFAFactor{}, backup: map[string]backupCode{}, roles: map[string][]auth.Role{}, permissions: map[string][]string{}, enrollments: map[string]enrollmentToken{}, webauthnCredentials: map[string]auth.WebAuthnCredential{}, webauthnCeremonies: map[string]auth.WebAuthnCeremony{}, failureStates: map[string]auth.AuthenticationFailureState{}, recoveryEmails: map[string]auth.RecoveryEmailToken{}, recoverySessions: map[string]auth.RecoverySession{}}
 	copy(r.key[:], "test-only-mfa-encryption-key-32!")
 	return r
 }
@@ -329,6 +337,54 @@ func (r *memoryRepo) ResetFailedLoginAttempts(_ context.Context, id string) erro
 	u.FailedLoginAttempts = 0
 	u.LockedUntil = nil
 	r.users[id] = *u
+	return nil
+}
+func (r *memoryRepo) ObserveAuthenticationFailure(_ context.Context, id string, mechanism auth.AuthenticationMechanism, policy auth.FailurePolicy) (*auth.AuthenticationFailureState, error) {
+	r.Lock()
+	defer r.Unlock()
+	now := time.Now()
+	key := id + ":" + string(mechanism)
+	state := r.failureStates[key]
+	if state.WindowStartedAt.IsZero() || now.Sub(state.WindowStartedAt) >= policy.ObservationWindow {
+		state = auth.AuthenticationFailureState{Mechanism: mechanism, WindowStartedAt: now}
+	}
+	state.FailureCount++
+	state.LastFailureAt = now
+	if state.FailureCount >= 6 && state.FailureCount <= 9 {
+		delay := time.Duration(1<<(state.FailureCount-5)) * time.Second
+		state.NextAttemptAt = ptrTime(now.Add(delay))
+	} else {
+		state.NextAttemptAt = nil
+	}
+	if state.FailureCount == policy.LockThreshold {
+		lock := policy.InitialLock * time.Duration(1<<state.LockCycleCount)
+		if lock > policy.MaximumLock {
+			lock = policy.MaximumLock
+		}
+		state.LockCycleCount++
+		state.LockedUntil = ptrTime(now.Add(lock))
+	}
+	r.failureStates[key] = state
+	return &state, nil
+}
+func ptrTime(v time.Time) *time.Time { return &v }
+func (r *memoryRepo) GetAuthenticationFailure(_ context.Context, id string, mechanism auth.AuthenticationMechanism) (*auth.AuthenticationFailureState, error) {
+	r.Lock()
+	defer r.Unlock()
+	state, ok := r.failureStates[id+":"+string(mechanism)]
+	if !ok {
+		return nil, nil
+	}
+	return &state, nil
+}
+func (r *memoryRepo) ResetAuthenticationFailures(_ context.Context, id string) error {
+	r.Lock()
+	defer r.Unlock()
+	for key := range r.failureStates {
+		if strings.HasPrefix(key, id+":") {
+			delete(r.failureStates, key)
+		}
+	}
 	return nil
 }
 func (r *memoryRepo) CreateLoginChallenge(_ context.Context, c auth.LoginChallenge) error {
@@ -682,6 +738,93 @@ func (r *memoryRepo) DeletePendingTOTPFactors(_ context.Context, uid string) err
 	for id, f := range r.factors {
 		if f.UserID == uid && f.Type == auth.MFAFactorTOTP && !f.IsConfirmed() {
 			delete(r.factors, id)
+		}
+	}
+	return nil
+}
+func (r *memoryRepo) DeleteSupersededMFAFactors(_ context.Context, uid, keep string) error {
+	for id, f := range r.factors {
+		if f.UserID == uid && id != keep {
+			delete(r.factors, id)
+		}
+	}
+	return nil
+}
+func (r *memoryRepo) InvalidateRecoveryEmailTokens(_ context.Context, uid string, intent auth.RecoveryIntent) error {
+	for hash, token := range r.recoveryEmails {
+		if token.UserID == uid && token.Intent == intent {
+			delete(r.recoveryEmails, hash)
+		}
+	}
+	return nil
+}
+func (r *memoryRepo) CreateRecoveryEmailToken(_ context.Context, token auth.RecoveryEmailToken, hash string) error {
+	r.recoveryEmails[hash] = token
+	return nil
+}
+func (r *memoryRepo) ConsumeRecoveryEmailToken(_ context.Context, hash string) (*auth.RecoveryEmailToken, error) {
+	token, ok := r.recoveryEmails[hash]
+	if !ok || !token.ExpiresAt.After(time.Now()) {
+		return nil, auth.ErrRecoveryTokenInvalid
+	}
+	delete(r.recoveryEmails, hash)
+	return &token, nil
+}
+func (r *memoryRepo) CreateRecoverySession(_ context.Context, session auth.RecoverySession, hash string) error {
+	r.recoverySessions[hash] = session
+	return nil
+}
+func (r *memoryRepo) GetRecoverySessionByHash(_ context.Context, hash string) (*auth.RecoverySession, error) {
+	session, ok := r.recoverySessions[hash]
+	if !ok {
+		return nil, auth.ErrRecoveryTokenInvalid
+	}
+	return &session, nil
+}
+func (r *memoryRepo) IncrementRecoverySessionFailure(_ context.Context, id string) (int, error) {
+	for hash, session := range r.recoverySessions {
+		if session.ID == id {
+			session.FailedAttempts++
+			r.recoverySessions[hash] = session
+			return session.FailedAttempts, nil
+		}
+	}
+	return 0, auth.ErrRecoveryTokenInvalid
+}
+func (r *memoryRepo) CompleteRecoveryPassword(_ context.Context, id string) error {
+	now := time.Now()
+	for hash, session := range r.recoverySessions {
+		if session.ID == id {
+			session.PasswordCompletedAt = &now
+			if !session.CanReplaceMFA || session.MFACompletedAt != nil {
+				session.ConsumedAt = &now
+			}
+			r.recoverySessions[hash] = session
+			return nil
+		}
+	}
+	return auth.ErrRecoveryTokenInvalid
+}
+func (r *memoryRepo) CompleteRecoveryMFA(_ context.Context, id string) error {
+	now := time.Now()
+	for hash, session := range r.recoverySessions {
+		if session.ID == id {
+			session.MFACompletedAt = &now
+			if !session.CanResetPassword || session.PasswordCompletedAt != nil {
+				session.ConsumedAt = &now
+			}
+			r.recoverySessions[hash] = session
+			return nil
+		}
+	}
+	return auth.ErrRecoveryTokenInvalid
+}
+func (r *memoryRepo) InvalidateRecoverySessionsByUser(_ context.Context, uid, except string) error {
+	now := time.Now()
+	for hash, session := range r.recoverySessions {
+		if session.UserID == uid && session.ID != except {
+			session.ConsumedAt = &now
+			r.recoverySessions[hash] = session
 		}
 	}
 	return nil

@@ -27,7 +27,7 @@ global installations.
 Clone the repository and enter it:
 
 ```sh
-git clone git@github.com:nodus-software/nodus-be.git
+git clone git@github.com:nodus-sofware/nodus-be.git
 cd nodus-be
 ```
 
@@ -121,11 +121,11 @@ connections. See [docs/deployment.md](docs/deployment.md) for production setup.
 
 ### Email in development
 
-Email delivery is asynchronous and durable. Domain operations write rendered
-messages to the PostgreSQL outbox in the same transaction as their tokens, and
-the API worker delivers them through the provider selected by `EMAIL_PROVIDER`.
-When that variable is empty in development, messages remain queued without any
-external delivery attempt. Use `.env.example` for ZeptoMail and Resend settings.
+SMTP is optional for starting the API. When `SMTP_HOST` is empty, email sending
+is a no-op, so registration and password-reset requests can succeed without
+delivering their links. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SENDER`, and
+`SMTP_PASSWORD` with a development SMTP account when testing email-driven
+onboarding flows.
 
 Email templates can be rendered locally without sending mail:
 

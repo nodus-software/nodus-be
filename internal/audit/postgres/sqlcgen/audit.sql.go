@@ -12,19 +12,25 @@ import (
 )
 
 const insertAuditLog = `-- name: InsertAuditLog :exec
-INSERT INTO audit_logs (id, "timestamp", user_id, action, target_resource, ip_address, result, metadata)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb)
+INSERT INTO audit_logs (id, "timestamp", user_id, target_user_id, action, target_resource,
+  ip_address, request_id, user_agent, reason_code, privileged_reference, result, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::text::jsonb)
 `
 
 type InsertAuditLogParams struct {
-	ID             string             `json:"id"`
-	Timestamp      pgtype.Timestamptz `json:"timestamp"`
-	UserID         *string            `json:"user_id"`
-	Action         string             `json:"action"`
-	TargetResource string             `json:"target_resource"`
-	IpAddress      string             `json:"ip_address"`
-	Result         AuditResult        `json:"result"`
-	Metadata       string             `json:"metadata"`
+	ID                  string             `json:"id"`
+	Timestamp           pgtype.Timestamptz `json:"timestamp"`
+	UserID              *string            `json:"user_id"`
+	TargetUserID        *string            `json:"target_user_id"`
+	Action              string             `json:"action"`
+	TargetResource      string             `json:"target_resource"`
+	IpAddress           string             `json:"ip_address"`
+	RequestID           string             `json:"request_id"`
+	UserAgent           string             `json:"user_agent"`
+	ReasonCode          string             `json:"reason_code"`
+	PrivilegedReference string             `json:"privileged_reference"`
+	Result              AuditResult        `json:"result"`
+	Metadata            string             `json:"metadata"`
 }
 
 func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) error {
@@ -32,9 +38,14 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 		arg.ID,
 		arg.Timestamp,
 		arg.UserID,
+		arg.TargetUserID,
 		arg.Action,
 		arg.TargetResource,
 		arg.IpAddress,
+		arg.RequestID,
+		arg.UserAgent,
+		arg.ReasonCode,
+		arg.PrivilegedReference,
 		arg.Result,
 		arg.Metadata,
 	)
@@ -42,7 +53,7 @@ func (q *Queries) InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) 
 }
 
 const listAuditLogs = `-- name: ListAuditLogs :many
-SELECT id, timestamp, user_id, action, target_resource, ip_address, result, metadata, created_at, tenant_id FROM audit_logs
+SELECT id, timestamp, user_id, action, target_resource, ip_address, result, metadata, created_at, tenant_id, target_user_id, request_id, user_agent, reason_code, privileged_reference FROM audit_logs
 WHERE ($2::uuid IS NULL OR user_id = $2)
   AND ($3::text IS NULL OR action = $3)
   AND ($4::timestamptz IS NULL OR "timestamp" >= $4)
@@ -85,6 +96,11 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.TenantID,
+			&i.TargetUserID,
+			&i.RequestID,
+			&i.UserAgent,
+			&i.ReasonCode,
+			&i.PrivilegedReference,
 		); err != nil {
 			return nil, err
 		}

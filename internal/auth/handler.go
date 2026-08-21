@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,8 +94,17 @@ func authContext(w http.ResponseWriter, r *http.Request) (middleware.AuthContext
 func (h *Handler) writeError(w http.ResponseWriter, err error) {
 	var locked *LockedError
 	var policy *PolicyViolationError
+	var retry *RetryError
 
 	switch {
+	case errors.As(err, &retry) && errors.Is(err, ErrAuthenticationChallenge):
+		response.ErrorWithDetails(w, http.StatusTooManyRequests, "AUTH_CHALLENGE_REQUIRED", "additional verification required", AuthenticationChallengeResponse{Challenge: "turnstile", RetryAfter: int(retry.RetryAfter.Seconds())})
+	case errors.As(err, &retry) && errors.Is(err, ErrAuthenticationDelayed):
+		seconds := max(1, int((retry.RetryAfter+time.Second-1)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		response.ErrorWithDetails(w, http.StatusTooManyRequests, "AUTH_RETRY_LATER", "authentication temporarily unavailable", AuthenticationChallengeResponse{RetryAfter: seconds})
+	case errors.Is(err, ErrAuthenticationUnavailable):
+		response.Error(w, http.StatusServiceUnavailable, "AUTH_TEMPORARILY_UNAVAILABLE", "authentication temporarily unavailable")
 	case errors.As(err, &locked):
 		response.ErrorWithDetails(w, http.StatusLocked, "ACCOUNT_LOCKED", "account is locked", AccountLockedResponse{
 			LockedUntil: locked.LockedUntil,
@@ -104,7 +114,7 @@ func (h *Handler) writeError(w http.ResponseWriter, err error) {
 		response.Validation(w, policy.Violations)
 	case errors.Is(err, ErrChallengeExpired):
 		response.Error(w, http.StatusGone, "CHALLENGE_EXPIRED", err.Error())
-	case errors.Is(err, ErrResetTokenInvalid), errors.Is(err, ErrInvalidPublicKey):
+	case errors.Is(err, ErrResetTokenInvalid), errors.Is(err, ErrRecoveryTokenInvalid), errors.Is(err, ErrInvalidPublicKey):
 		response.BadRequest(w, err.Error())
 	case errors.Is(err, ErrWebAuthnInvalid), errors.Is(err, ErrWebAuthnUnavailable):
 		response.BadRequest(w, err.Error())
@@ -199,7 +209,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := h.service.Login(r.Context(), req, clientIP(r))
+	resp, err := h.service.Login(r.Context(), req, clientIP(r), r.UserAgent())
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -415,6 +425,99 @@ func (h *Handler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.NoContent(w)
+}
+
+func (h *Handler) RequestRecovery(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[RecoveryRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.RequestRecovery(r.Context(), req, clientIP(r)); err != nil {
+		h.log.Error("account recovery request failed", "error", err.Error())
+	}
+	response.Accepted(w, map[string]string{"status": "accepted"})
+}
+
+func (h *Handler) VerifyRecovery(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[RecoveryVerifyRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.VerifyRecovery(r.Context(), req.Token)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
+}
+
+func (h *Handler) RecoveryPassword(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[RecoveryPasswordRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.CompleteRecoveryPassword(r.Context(), req); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.NoContent(w)
+}
+
+func (h *Handler) RecoveryTOTPSetup(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[RecoveryTOTPSetupRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.SetupRecoveryTOTP(r.Context(), req.RecoveryToken)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
+}
+
+func (h *Handler) RecoveryTOTPConfirm(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[RecoveryTOTPConfirmRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.ConfirmRecoveryTOTP(r.Context(), req)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
+}
+
+func (h *Handler) RecoveryWebAuthnOptions(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[RecoveryWebAuthnOptionsRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.BeginRecoveryWebAuthn(r.Context(), req)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
+}
+
+func (h *Handler) RecoveryWebAuthnVerify(w http.ResponseWriter, r *http.Request) {
+	req, ok := bindJSON[RecoveryWebAuthnVerifyRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.FinishRecoveryWebAuthn(r.Context(), req)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	response.OK(w, result)
 }
 
 func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {

@@ -62,6 +62,9 @@ type Config struct {
 	// Fixed by the API contract, not environment-tunable.
 	ChallengeTokenTTL     time.Duration
 	PasswordResetTokenTTL time.Duration
+	RecoveryEmailTokenTTL time.Duration
+	RecoverySessionTTL    time.Duration
+	RecoveryMaxAttempts   int
 	InviteTokenTTL        time.Duration
 	EnrollmentTokenTTL    time.Duration
 
@@ -90,8 +93,24 @@ type Config struct {
 	WebAuthnCeremonyTTL   time.Duration
 
 	// Lockout policy
-	LockoutMaxAttempts int
-	LockoutDuration    time.Duration
+	LockoutMaxAttempts           int
+	LockoutDuration              time.Duration
+	AuthSecurityMode             string
+	AuthFailureObservationWindow time.Duration
+	AuthFailureCycleWindow       time.Duration
+	AuthFailureLockThreshold     int
+	AuthFailureInitialLock       time.Duration
+	AuthFailureMaximumLock       time.Duration
+	AuthRateLimitHMACSecret      string
+	AuthRateLimitIdentifierLimit int
+	AuthRateLimitIPLimit         int
+	AuthRateLimitTenantLimit     int
+	AuthRateLimitContextLimit    int
+	AuthRateLimitWindow          time.Duration
+	TurnstileSecretKey           string
+	TurnstileVerifyURL           string
+	TurnstileTimeout             time.Duration
+	TurnstileTestToken           string
 
 	// Password reset rate limiting
 	PasswordResetMaxPerUsernamePerHour int
@@ -170,6 +189,9 @@ func Load() (*Config, error) {
 
 		ChallengeTokenTTL:     5 * time.Minute,
 		PasswordResetTokenTTL: 15 * time.Minute,
+		RecoveryEmailTokenTTL: getEnvDuration("RECOVERY_EMAIL_TOKEN_TTL", 10*time.Minute),
+		RecoverySessionTTL:    getEnvDuration("RECOVERY_SESSION_TTL", 10*time.Minute),
+		RecoveryMaxAttempts:   getEnvInt("RECOVERY_MAX_ATTEMPTS", 5),
 		InviteTokenTTL:        24 * time.Hour,
 		EnrollmentTokenTTL:    30 * time.Minute,
 
@@ -193,8 +215,24 @@ func Load() (*Config, error) {
 		WebAuthnOrigins:       strings.Fields(getEnv("WEBAUTHN_ORIGINS", "http://localhost:5173 http://localhost:3000")),
 		WebAuthnCeremonyTTL:   getEnvDuration("WEBAUTHN_CEREMONY_TTL", 5*time.Minute),
 
-		LockoutMaxAttempts: getEnvInt("LOCKOUT_MAX_ATTEMPTS", 5),
-		LockoutDuration:    getEnvDuration("LOCKOUT_DURATION", 15*time.Minute),
+		LockoutMaxAttempts:           getEnvInt("LOCKOUT_MAX_ATTEMPTS", 5),
+		LockoutDuration:              getEnvDuration("LOCKOUT_DURATION", 15*time.Minute),
+		AuthSecurityMode:             strings.ToLower(getEnv("AUTH_SECURITY_MODE", "observation")),
+		AuthFailureObservationWindow: getEnvDuration("AUTH_FAILURE_OBSERVATION_WINDOW", 15*time.Minute),
+		AuthFailureCycleWindow:       getEnvDuration("AUTH_FAILURE_CYCLE_WINDOW", 24*time.Hour),
+		AuthFailureLockThreshold:     getEnvInt("AUTH_FAILURE_LOCK_THRESHOLD", 10),
+		AuthFailureInitialLock:       getEnvDuration("AUTH_FAILURE_INITIAL_LOCK", 15*time.Minute),
+		AuthFailureMaximumLock:       getEnvDuration("AUTH_FAILURE_MAXIMUM_LOCK", time.Hour),
+		AuthRateLimitHMACSecret:      requiredWithDevDefault("AUTH_RATE_LIMIT_HMAC_SECRET", development, "development-only-rate-limit-secret"),
+		AuthRateLimitIdentifierLimit: getEnvInt("AUTH_RATE_LIMIT_IDENTIFIER_LIMIT", 30),
+		AuthRateLimitIPLimit:         getEnvInt("AUTH_RATE_LIMIT_IP_LIMIT", 300),
+		AuthRateLimitTenantLimit:     getEnvInt("AUTH_RATE_LIMIT_TENANT_LIMIT", 3000),
+		AuthRateLimitContextLimit:    getEnvInt("AUTH_RATE_LIMIT_CONTEXT_LIMIT", 100),
+		AuthRateLimitWindow:          getEnvDuration("AUTH_RATE_LIMIT_WINDOW", 15*time.Minute),
+		TurnstileSecretKey:           getEnv("TURNSTILE_SECRET_KEY", ""),
+		TurnstileVerifyURL:           getEnv("TURNSTILE_VERIFY_URL", "https://challenges.cloudflare.com/turnstile/v0/siteverify"),
+		TurnstileTimeout:             getEnvDuration("TURNSTILE_TIMEOUT", 3*time.Second),
+		TurnstileTestToken:           getEnv("TURNSTILE_TEST_TOKEN", "development-turnstile-pass"),
 
 		PasswordResetMaxPerUsernamePerHour: 5,
 		PasswordResetMaxPerIPPerHour:       20,
@@ -234,6 +272,15 @@ func Load() (*Config, error) {
 		if err != nil || port < 1 || port > 65535 {
 			return nil, fmt.Errorf("TENANT_URL_PORT must be empty or a valid TCP port")
 		}
+	}
+	if cfg.AuthSecurityMode != "observation" && cfg.AuthSecurityMode != "enforcement" {
+		return nil, fmt.Errorf("AUTH_SECURITY_MODE must be observation or enforcement")
+	}
+	if cfg.AppEnv == "production" && cfg.AuthSecurityMode == "enforcement" && (cfg.AuthRateLimitHMACSecret == "" || cfg.TurnstileSecretKey == "") {
+		return nil, fmt.Errorf("AUTH_RATE_LIMIT_HMAC_SECRET and TURNSTILE_SECRET_KEY are required for production enforcement")
+	}
+	if cfg.AuthFailureObservationWindow <= 0 || cfg.AuthFailureCycleWindow <= 0 || cfg.AuthFailureLockThreshold <= 0 || cfg.AuthFailureInitialLock <= 0 || cfg.AuthFailureMaximumLock < cfg.AuthFailureInitialLock {
+		return nil, fmt.Errorf("authentication failure policy values are invalid")
 	}
 
 	return cfg, nil

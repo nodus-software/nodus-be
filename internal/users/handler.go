@@ -58,6 +58,51 @@ func (h *Handler) DeactivateUser(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, profile)
 }
 
+func (h *Handler) SuspendUser(w http.ResponseWriter, r *http.Request) {
+	ac, ok := middleware.AuthFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	req, ok := bindJSON[LifecycleReasonRequest](w, r)
+	if !ok {
+		return
+	}
+	profile, err := h.service.SuspendUser(r.Context(), ac.UserID, chi.URLParam(r, "userId"), req.Reason)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.OK(w, profile)
+}
+
+func (h *Handler) RestoreUser(w http.ResponseWriter, r *http.Request) {
+	ac, ok := middleware.AuthFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w, "authentication required")
+		return
+	}
+	req, ok := bindJSON[LifecycleReasonRequest](w, r)
+	if !ok {
+		return
+	}
+	profile, err := h.service.RestoreUser(r.Context(), ac.UserID, chi.URLParam(r, "userId"), req.Reason)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.OK(w, profile)
+}
+
+func (h *Handler) GetSecurityStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := h.service.GetSecurityStatus(r.Context(), chi.URLParam(r, "userId"))
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	response.OK(w, status)
+}
+
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	filter := ListUsersFilter{}
 	q := r.URL.Query()

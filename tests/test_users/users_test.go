@@ -144,7 +144,7 @@ func TestDeactivateUser_RetainsProfileAndChangesStatus(t *testing.T) {
 	}
 	var profile users.UserProfileResponse
 	Decode(t, rec, &profile)
-	if profile.Status != "deactivated" || profile.DeactivatedAt == nil {
+	if profile.Status != "deactivated" || profile.DeactivatedAt == nil || profile.DeactivatedBy == nil || profile.DeactivationReason == nil || *profile.DeactivationReason != "employment ended" {
 		t.Fatalf("expected retained deactivated profile, got %+v", profile)
 	}
 	if _, ok := env.Repo.users[target]; !ok {
@@ -156,7 +156,7 @@ func TestDeactivateUser_LastActiveSuperuser_Returns409(t *testing.T) {
 	env := Setup(t)
 	target := env.CreateUser(t, users.StatusActive)
 	env.Repo.superusers[target] = true
-	_, actorToken := env.NewActor(t, false, "users:deactivate")
+	_, actorToken := env.NewActor(t, true, "users:deactivate")
 
 	rec := env.JSON(t, http.MethodPost, "/users/"+target+"/deactivate", actorToken, users.LifecycleReasonRequest{
 		Reason: "employment ended",
@@ -179,5 +179,98 @@ func TestDeactivateUser_SelfDeactivation_Returns409(t *testing.T) {
 	})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSuspendAndRestoreUserAreExplicitAndIdempotent(t *testing.T) {
+	env := Setup(t)
+	target := env.CreateUser(t, users.StatusActive)
+	actorID, token := env.NewActor(t, false, "users:deactivate")
+
+	suspended := env.JSON(t, http.MethodPost, "/users/"+target+"/suspend", token, users.LifecycleReasonRequest{Reason: "leave of absence"})
+	if suspended.Code != http.StatusOK {
+		t.Fatalf("suspend: %d %s", suspended.Code, suspended.Body.String())
+	}
+	var profile users.UserProfileResponse
+	Decode(t, suspended, &profile)
+	if profile.Status != "suspended" || profile.SuspendedAt == nil || profile.SuspendedBy == nil || *profile.SuspendedBy != actorID || profile.SuspensionReason == nil {
+		t.Fatalf("missing suspension metadata: %+v", profile)
+	}
+	repeated := env.JSON(t, http.MethodPost, "/users/"+target+"/suspend", token, users.LifecycleReasonRequest{Reason: "different reason"})
+	if repeated.Code != http.StatusOK {
+		t.Fatalf("repeat suspend: %d %s", repeated.Code, repeated.Body.String())
+	}
+
+	restored := env.JSON(t, http.MethodPost, "/users/"+target+"/restore", token, users.LifecycleReasonRequest{Reason: "returned"})
+	if restored.Code != http.StatusOK {
+		t.Fatalf("restore: %d %s", restored.Code, restored.Body.String())
+	}
+	profile = users.UserProfileResponse{}
+	Decode(t, restored, &profile)
+	if profile.Status != "active" || profile.SuspendedAt != nil || profile.SuspensionReason != nil {
+		t.Fatalf("suspension metadata was not cleared: %+v", profile)
+	}
+	repeated = env.JSON(t, http.MethodPost, "/users/"+target+"/restore", token, users.LifecycleReasonRequest{Reason: "returned"})
+	if repeated.Code != http.StatusOK {
+		t.Fatalf("repeat restore: %d %s", repeated.Code, repeated.Body.String())
+	}
+}
+
+func TestUpdateUserCannotMutateLifecycleStatus(t *testing.T) {
+	env := Setup(t)
+	target := env.CreateUser(t, users.StatusActive)
+	_, token := env.NewActor(t, false, "users:write")
+	status := "suspended"
+	rec := env.JSON(t, http.MethodPatch, "/users/"+target, token, users.UpdateUserRequest{Status: &status})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected explicit lifecycle endpoint requirement, got %d %s", rec.Code, rec.Body.String())
+	}
+	if env.Repo.users[target].Status != users.StatusActive {
+		t.Fatal("generic update changed lifecycle status")
+	}
+}
+
+func TestSuspendSuperuserRequiresSuperuserActor(t *testing.T) {
+	env := Setup(t)
+	target := env.CreateUser(t, users.StatusActive)
+	env.Repo.superusers[target] = true
+	other := env.CreateUser(t, users.StatusActive)
+	env.Repo.superusers[other] = true
+	_, token := env.NewActor(t, false, "users:deactivate")
+	rec := env.JSON(t, http.MethodPost, "/users/"+target+"/suspend", token, users.LifecycleReasonRequest{Reason: "test"})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected hierarchy denial, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLastSuperuserCannotBeDemotedByRoleReplacement(t *testing.T) {
+	env := Setup(t)
+	target := env.CreateUser(t, users.StatusActive)
+	env.Repo.superusers[target] = true
+	env.CreateRole("ordinary", "Staff", false, false)
+	_, token := env.NewActor(t, true, "users:write")
+	rec := env.JSON(t, http.MethodPatch, "/users/"+target, token, users.UpdateUserRequest{RoleIDs: []string{"ordinary"}})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected last-superuser protection, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSecurityStatusReturnsLifecycleMetadataWithoutSecrets(t *testing.T) {
+	env := Setup(t)
+	target := env.CreateUser(t, users.StatusActive)
+	actorID, lifecycleToken := env.NewActor(t, false, "users:deactivate")
+	rec := env.JSON(t, http.MethodPost, "/users/"+target+"/suspend", lifecycleToken, users.LifecycleReasonRequest{Reason: "security investigation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("suspend: %d %s", rec.Code, rec.Body.String())
+	}
+	_, readToken := env.NewActor(t, false, "users:read")
+	rec = env.JSON(t, http.MethodGet, "/users/"+target+"/security-status", readToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("security status: %d %s", rec.Code, rec.Body.String())
+	}
+	var status users.SecurityStatusResponse
+	Decode(t, rec, &status)
+	if status.Status != "suspended" || status.SuspendedBy == nil || *status.SuspendedBy != actorID || status.SuspensionReason == nil || *status.SuspensionReason != "security investigation" {
+		t.Fatalf("unexpected status: %+v", status)
 	}
 }

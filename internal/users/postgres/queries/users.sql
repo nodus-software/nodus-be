@@ -73,11 +73,6 @@ WHERE u.id = sqlc.arg(user_id)
   AND r.tenant_id = u.tenant_id
 ON CONFLICT DO NOTHING;
 
--- name: UpdateUserStatus :exec
-UPDATE users SET status = $2
-WHERE id = $1
-  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
-
 -- name: SetProviderIdentifier :exec
 UPDATE users SET provider_identifier = $2
 WHERE id = $1
@@ -122,8 +117,21 @@ WHERE u.id <> $1 AND u.status = 'active'
 SELECT pg_advisory_xact_lock(hashtextextended(current_setting('app.tenant_id', true), 0));
 
 -- name: DeactivateUser :exec
-UPDATE users SET status = 'deactivated', deactivated_at = $2
+UPDATE users SET status = 'deactivated', deactivated_at = $2, deactivated_by = $3,
+    deactivation_reason = $4, suspended_at = NULL, suspended_by = NULL, suspension_reason = NULL
 WHERE id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: SuspendUser :exec
+UPDATE users SET status = 'suspended', suspended_at = $2, suspended_by = $3,
+    suspension_reason = $4
+WHERE id = $1 AND status <> 'suspended'
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: RestoreUser :exec
+UPDATE users SET status = 'active', suspended_at = NULL, suspended_by = NULL,
+    suspension_reason = NULL
+WHERE id = $1 AND status = 'suspended'
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
 
 -- name: RevokeSessionsByUser :exec
@@ -150,3 +158,16 @@ WHERE user_id = $1 AND used_at IS NULL
 UPDATE enrollment_tokens SET consumed_at = now()
 WHERE user_id = $1 AND consumed_at IS NULL
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: ConsumeRecoverySessionsByUser :exec
+UPDATE recovery_sessions SET consumed_at = now()
+WHERE user_id = $1 AND consumed_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid;
+
+-- name: GetTemporaryRestrictionsByUser :many
+SELECT mechanism::text AS mechanism, failure_count, next_attempt_at, locked_until
+FROM authentication_failure_states
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND (locked_until > now() OR next_attempt_at > now())
+ORDER BY mechanism;

@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const completeRecoveryMFA = `-- name: CompleteRecoveryMFA :execrows
+UPDATE recovery_sessions SET mfa_completed_at = now(), consumed_at = CASE WHEN NOT can_reset_password OR password_completed_at IS NOT NULL THEN now() ELSE consumed_at END
+WHERE id = $1 AND mfa_completed_at IS NULL AND consumed_at IS NULL
+`
+
+func (q *Queries) CompleteRecoveryMFA(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, completeRecoveryMFA, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const completeRecoveryPassword = `-- name: CompleteRecoveryPassword :execrows
+UPDATE recovery_sessions SET password_completed_at = now(), consumed_at = CASE WHEN NOT can_replace_mfa OR mfa_completed_at IS NOT NULL THEN now() ELSE consumed_at END
+WHERE id = $1 AND password_completed_at IS NULL AND consumed_at IS NULL
+`
+
+func (q *Queries) CompleteRecoveryPassword(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, completeRecoveryPassword, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :exec
 UPDATE password_reset_tokens SET used_at = now() WHERE id = $1
 `
@@ -18,6 +44,27 @@ UPDATE password_reset_tokens SET used_at = now() WHERE id = $1
 func (q *Queries) ConsumePasswordResetToken(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, consumePasswordResetToken, id)
 	return err
+}
+
+const consumeRecoveryEmailToken = `-- name: ConsumeRecoveryEmailToken :one
+UPDATE recovery_email_tokens SET consumed_at = now()
+WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now() RETURNING id, tenant_id, user_id, intent, token_hash, expires_at, consumed_at, created_at
+`
+
+func (q *Queries) ConsumeRecoveryEmailToken(ctx context.Context, tokenHash string) (RecoveryEmailToken, error) {
+	row := q.db.QueryRow(ctx, consumeRecoveryEmailToken, tokenHash)
+	var i RecoveryEmailToken
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.UserID,
+		&i.Intent,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const countPasswordResetAttemptsByIP = `-- name: CountPasswordResetAttemptsByIP :one
@@ -76,6 +123,54 @@ func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswo
 	return err
 }
 
+const createRecoveryEmailToken = `-- name: CreateRecoveryEmailToken :exec
+INSERT INTO recovery_email_tokens (id, user_id, intent, token_hash, expires_at) VALUES ($1, $2, $3, $4, $5)
+`
+
+type CreateRecoveryEmailTokenParams struct {
+	ID        string             `json:"id"`
+	UserID    string             `json:"user_id"`
+	Intent    RecoveryIntent     `json:"intent"`
+	TokenHash string             `json:"token_hash"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateRecoveryEmailToken(ctx context.Context, arg CreateRecoveryEmailTokenParams) error {
+	_, err := q.db.Exec(ctx, createRecoveryEmailToken,
+		arg.ID,
+		arg.UserID,
+		arg.Intent,
+		arg.TokenHash,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const createRecoverySession = `-- name: CreateRecoverySession :exec
+INSERT INTO recovery_sessions (id, user_id, token_hash, can_reset_password, can_replace_mfa, expires_at) VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type CreateRecoverySessionParams struct {
+	ID               string             `json:"id"`
+	UserID           string             `json:"user_id"`
+	TokenHash        string             `json:"token_hash"`
+	CanResetPassword bool               `json:"can_reset_password"`
+	CanReplaceMfa    bool               `json:"can_replace_mfa"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateRecoverySession(ctx context.Context, arg CreateRecoverySessionParams) error {
+	_, err := q.db.Exec(ctx, createRecoverySession,
+		arg.ID,
+		arg.UserID,
+		arg.TokenHash,
+		arg.CanResetPassword,
+		arg.CanReplaceMfa,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const getPasswordResetTokenByHash = `-- name: GetPasswordResetTokenByHash :one
 SELECT id, user_id, token_hash, expires_at, used_at, created_at, tenant_id FROM password_reset_tokens WHERE token_hash = $1
 `
@@ -95,6 +190,41 @@ func (q *Queries) GetPasswordResetTokenByHash(ctx context.Context, tokenHash str
 	return i, err
 }
 
+const getRecoverySessionByHash = `-- name: GetRecoverySessionByHash :one
+SELECT id, tenant_id, user_id, token_hash, can_reset_password, can_replace_mfa, password_completed_at, mfa_completed_at, failed_attempts, expires_at, consumed_at, created_at FROM recovery_sessions WHERE token_hash = $1
+`
+
+func (q *Queries) GetRecoverySessionByHash(ctx context.Context, tokenHash string) (RecoverySession, error) {
+	row := q.db.QueryRow(ctx, getRecoverySessionByHash, tokenHash)
+	var i RecoverySession
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.CanResetPassword,
+		&i.CanReplaceMfa,
+		&i.PasswordCompletedAt,
+		&i.MfaCompletedAt,
+		&i.FailedAttempts,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const incrementRecoverySessionFailure = `-- name: IncrementRecoverySessionFailure :one
+UPDATE recovery_sessions SET failed_attempts = failed_attempts + 1 WHERE id = $1 RETURNING failed_attempts
+`
+
+func (q *Queries) IncrementRecoverySessionFailure(ctx context.Context, id string) (int32, error) {
+	row := q.db.QueryRow(ctx, incrementRecoverySessionFailure, id)
+	var failed_attempts int32
+	err := row.Scan(&failed_attempts)
+	return failed_attempts, err
+}
+
 const invalidateOtherPasswordResetTokens = `-- name: InvalidateOtherPasswordResetTokens :exec
 UPDATE password_reset_tokens
 SET used_at = now()
@@ -108,6 +238,34 @@ type InvalidateOtherPasswordResetTokensParams struct {
 
 func (q *Queries) InvalidateOtherPasswordResetTokens(ctx context.Context, arg InvalidateOtherPasswordResetTokensParams) error {
 	_, err := q.db.Exec(ctx, invalidateOtherPasswordResetTokens, arg.UserID, arg.ID)
+	return err
+}
+
+const invalidateRecoveryEmailTokens = `-- name: InvalidateRecoveryEmailTokens :exec
+UPDATE recovery_email_tokens SET consumed_at = now() WHERE user_id = $1 AND intent = $2 AND consumed_at IS NULL
+`
+
+type InvalidateRecoveryEmailTokensParams struct {
+	UserID string         `json:"user_id"`
+	Intent RecoveryIntent `json:"intent"`
+}
+
+func (q *Queries) InvalidateRecoveryEmailTokens(ctx context.Context, arg InvalidateRecoveryEmailTokensParams) error {
+	_, err := q.db.Exec(ctx, invalidateRecoveryEmailTokens, arg.UserID, arg.Intent)
+	return err
+}
+
+const invalidateRecoverySessionsByUser = `-- name: InvalidateRecoverySessionsByUser :exec
+UPDATE recovery_sessions SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL AND id != $2
+`
+
+type InvalidateRecoverySessionsByUserParams struct {
+	UserID string `json:"user_id"`
+	ID     string `json:"id"`
+}
+
+func (q *Queries) InvalidateRecoverySessionsByUser(ctx context.Context, arg InvalidateRecoverySessionsByUserParams) error {
+	_, err := q.db.Exec(ctx, invalidateRecoverySessionsByUser, arg.UserID, arg.ID)
 	return err
 }
 

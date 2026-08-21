@@ -2,6 +2,26 @@ package auth
 
 import "time"
 
+type AuthenticationMechanism string
+
+const (
+	AuthenticationMechanismPassword AuthenticationMechanism = "password"
+	AuthenticationMechanismMFA      AuthenticationMechanism = "mfa"
+	AuthenticationMechanismRecovery AuthenticationMechanism = "recovery"
+	AuthenticationMechanismCaptcha  AuthenticationMechanism = "captcha"
+)
+
+type AuthenticationFailureState struct {
+	Mechanism        AuthenticationMechanism
+	FailureCount     int
+	WindowStartedAt  time.Time
+	LastFailureAt    time.Time
+	NextAttemptAt    *time.Time
+	LockedUntil      *time.Time
+	LockCycleCount   int
+	CycleWindowStart *time.Time
+}
+
 type UserStatus string
 
 const (
@@ -124,4 +144,26 @@ type PasswordResetToken struct {
 	ExpiresAt time.Time
 	UsedAt    *time.Time
 	CreatedAt time.Time
+}
+
+type RecoveryIntent string
+
+const (
+	RecoveryIntentPassword RecoveryIntent = "password"
+	RecoveryIntentMFA      RecoveryIntent = "mfa"
+	RecoveryIntentBoth     RecoveryIntent = "both"
+)
+
+type RecoveryEmailToken struct {
+	ID, UserID string
+	Intent     RecoveryIntent
+	ExpiresAt  time.Time
+}
+
+type RecoverySession struct {
+	ID, UserID                                      string
+	CanResetPassword, CanReplaceMFA                 bool
+	PasswordCompletedAt, MFACompletedAt, ConsumedAt *time.Time
+	FailedAttempts                                  int
+	ExpiresAt                                       time.Time
 }

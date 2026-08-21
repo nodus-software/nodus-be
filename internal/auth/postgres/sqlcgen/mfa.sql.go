@@ -203,6 +203,20 @@ func (q *Queries) DeletePendingTOTPFactors(ctx context.Context, userID string) e
 	return err
 }
 
+const deleteSupersededMFAFactors = `-- name: DeleteSupersededMFAFactors :exec
+DELETE FROM mfa_factors WHERE user_id=$1 AND id != $2
+`
+
+type DeleteSupersededMFAFactorsParams struct {
+	UserID string `json:"user_id"`
+	ID     string `json:"id"`
+}
+
+func (q *Queries) DeleteSupersededMFAFactors(ctx context.Context, arg DeleteSupersededMFAFactorsParams) error {
+	_, err := q.db.Exec(ctx, deleteSupersededMFAFactors, arg.UserID, arg.ID)
+	return err
+}
+
 const getEnrollmentTokenByHash = `-- name: GetEnrollmentTokenByHash :one
 SELECT id::text, user_id::text, expires_at,
        CASE WHEN consumed_at IS NULL THEN false ELSE true END::boolean AS consumed

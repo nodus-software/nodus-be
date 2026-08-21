@@ -1,0 +1,258 @@
+# Phase 6 — Deferred Platform Recovery Plane
+
+## Status and purpose
+
+Phase 6 is intentionally deferred. Phases 1–5 remain independently deployable and continue to provide normal
+organization-scoped password, MFA, suspension, restoration, and reactivation workflows. The application does not
+depend on Phase 6 at runtime.
+
+Phase 6 will add a separate control plane for exceptional cases in which organization-scoped self-service and
+administrator recovery cannot succeed. It must not turn tenant users or tenant superusers into platform staff, and it
+must not provide impersonation, direct password setting, MFA-secret access, or database-style unlock capabilities.
+
+Implementation should begin only after the unified recovery frontend is complete, the Phase 5 observation period has
+produced representative metrics, and operational ownership of platform recovery has been assigned.
+
+## Decisions fixed by this plan
+
+- Platform administrators are separate identities, not rows in users and not members of organizations.
+- Platform authorization uses separate roles and a narrowly scoped platform:account_recovery permission.
+- Platform authentication uses dedicated routes, sessions, refresh cookies, signing configuration, and JWT audience.
+- Every platform administrator must enroll strong MFA. WebAuthn is preferred; TOTP is the supported fallback.
+- Recovery initiation requires a recently completed strong reauthentication ceremony.
+- Version 1 uses one authorized initiator. Dual approval is explicitly deferred but the recovery schema records an
+  approval state so it can be introduced without replacing the workflow.
+- The platform console is a separate frontend deployment and hostname. It may share design-system source code from
+  nodus-fe, but it has a separate entry point, build artifact, AuthProvider, API client, cookie namespace, and release.
+- Platform routes never resolve tenant context and never accept X-Tenant-Slug as authorization.
+- The existing Phase 3 user-completion flow remains the only mechanism that changes a password or replaces MFA.
+- Platform staff may authorize capabilities and issue an invitation, but cannot set credentials, read secrets or
+  recovery codes, consume MFA challenges for the user, impersonate the user, or mark authentication successful.
+- The affected user and configured organization security contacts are notified of initiation, cancellation,
+  rejection, expiration, and completion through the existing durable email outbox.
+- Existing audit_logs remains the append-only audit destination, enriched with the platform actor and privileged
+  reference. No competing audit store is introduced.
+
+## Delivery sequence
+
+### 6.0 — Prerequisites and interim operations
+
+- Complete the tenant-facing unified recovery UI for password, MFA, and combined recovery before exposing platform
+  recovery.
+- Assign an operational owner, an incident escalation contact, and a group authorized to perform external identity
+  verification.
+- Define accepted external verification references. Version 1 accepts an immutable ticket/case identifier from the
+  approved support system; free-form evidence and identity documents must never be stored in Nodus.
+- Add the interim runbook below to operational documentation and train support staff. Until Phase 6 is enabled, cases
+  that cannot pass self-service or tenant-admin recovery are escalated and may be declared unrecoverable. Direct
+  database password changes, MFA deletion, lock deletion, or status restoration are prohibited.
+
+Exit criteria: unified recovery UI deployed; Phase 5 thresholds reviewed; named operational owner; approved case
+system and incident process; no unresolved high-severity recovery defects.
+
+### 6.1 — Platform identity and authentication boundary
+
+Add global, non-tenant tables:
+
+- platform_users: id, email, full_name, status, password_hash, password_changed_at, last_login_at, timestamps.
+- platform_roles and platform_permissions, with platform_user_roles and platform_role_permissions joins.
+- platform_mfa_factors and platform_webauthn_credentials using the existing encryption and credential formats but
+  separate foreign keys and queries.
+- platform_sessions and platform_refresh_tokens, with immediate revocation on status or role changes.
+- platform_login_challenges and platform_reauthentication_challenges, all hashed, short-lived, and single-use.
+
+Platform tables do not carry tenant_id and do not use tenant RLS policies. The runtime role receives only the exact
+privileges required by the platform repositories. Platform-user provisioning is an explicit migration/operations
+command; there is no public registration endpoint.
+
+Authentication behavior:
+
+- POST /platform/auth/login validates platform credentials and returns an MFA challenge only.
+- POST /platform/auth/login/mfa and equivalent WebAuthn endpoints establish a platform session.
+- POST /platform/auth/refresh rotates a platform refresh token stored in a platform-specific HttpOnly cookie.
+- POST /platform/auth/logout revokes the current platform session.
+- GET /platform/auth/me returns platform identity, roles, permissions, and MFA status.
+- POST /platform/auth/reauth and WebAuthn equivalents issue a five-minute, single-use reauthentication grant.
+- Platform access tokens use a distinct signing secret or asymmetric key, issuer/audience pair, and claims type.
+  Tenant middleware must reject them, and platform middleware must reject tenant tokens.
+- Production platform access requires MFA and the platform:account_recovery permission. Disabling a platform user
+  revokes all sessions, refresh tokens, login challenges, and reauthentication grants atomically.
+
+The backend may run in the existing API process, but platform routes are registered in a separate router group outside
+ResolveTenant and TenantTransaction. Platform repositories never receive a tenant-scoped transaction context.
+
+Exit criteria: platform and tenant token cross-use tests pass; strong MFA is mandatory; platform session revocation is
+immediate; no platform route is reachable through tenant authorization.
+
+### 6.2 — Recovery authorization workflow
+
+Add global platform_account_recoveries with:
+
+- id, target_tenant_id, target_user_id, initiated_by_platform_user_id;
+- requested capabilities: password, mfa, or both;
+- state: pending, issued, cancelled, rejected, expired, completed;
+- reason_code, external_verification_reference, expires_at, issued_at, completed_at, cancelled_at, rejected_at;
+- cancellation/rejection actor and reason fields; timestamps; and an optimistic/concurrency version.
+
+Add platform_recovery_invitations containing recovery_id, a unique token hash, expiry, consumed_at, and created_at.
+Only hashes are stored. Replacement invalidates the previous active invitation. Database constraints enforce one
+active invitation per recovery and valid state transitions. Recovery records are retained for audit and reporting.
+
+Initiation rules:
+
+- Require platform:account_recovery and a valid five-minute reauthentication grant.
+- Require an existing target tenant and target user selected by immutable IDs, not email alone.
+- Require a bounded reason code and external verification reference; neither may contain secrets or evidence.
+- Permit only password, mfa, or both capabilities.
+- Refuse targets in a permanently closed organization. A suspended organization may receive an invitation, but user
+  completion remains blocked until the organization is restored through its normal lifecycle process.
+- Do not change user.status, organization.status, passwords, factors, recovery codes, failure states, or sessions at
+  initiation.
+- Create the recovery record, invitation, audit event, and notifications in one transaction.
+- Rate-limit initiation by platform actor, target user, organization, and source IP. PostgreSQL is authoritative;
+  Redis remains supplemental and fails open only for those supplemental counters.
+
+Public platform-management endpoints:
+
+- POST /platform/account-recoveries
+- GET /platform/account-recoveries with state, tenant, user, actor, and date filters
+- GET /platform/account-recoveries/{recoveryId}
+- POST /platform/account-recoveries/{recoveryId}/cancel
+- POST /platform/account-recoveries/{recoveryId}/reject
+
+Responses never include token hashes, raw invitation tokens after the initiating response, password hashes, MFA
+secrets, credentials, recovery codes, or email message bodies.
+
+### 6.3 — User invitation redemption and completion
+
+The invitation URL opens the tenant-facing recovery UI on the target organization's hostname. The URL contains the raw
+single-use platform invitation token; it is never sent to the platform console after creation.
+
+Public tenant-aware endpoints:
+
+- POST /auth/recovery/platform/verify consumes the platform invitation and returns the same separately hashed,
+  short-lived recovery-session token used by Phase 3, restricted to the authorized capabilities.
+- Existing POST /auth/recovery/password and MFA recovery endpoints perform completion.
+
+Verification must require that the resolved tenant matches target_tenant_id. Invalid, expired, replaced, cancelled,
+rejected, consumed, cross-tenant, and over-attempted invitations return the same public error. Verification does not
+restore suspended/deactivated users or suspended organizations.
+
+Completion behavior remains Phase 3 behavior:
+
+- Password capability changes only the password.
+- MFA capability preserves existing factors until the replacement is cryptographically confirmed.
+- Confirmed MFA replacement deletes superseded factors and codes, issues new recovery codes once, consumes the
+  recovery session, clears automatic password/MFA restrictions, and revokes sessions and refresh tokens.
+- Recovery never clears explicit user or organization lifecycle restrictions.
+
+When every authorized capability is completed, atomically mark the platform recovery completed and invalidate any
+remaining invitation. Cancellation, rejection, or expiry consumes related recovery sessions that have not completed.
+
+### 6.4 — Platform console deployment
+
+Create a separate platform-console build from nodus-fe:
+
+- Dedicated platform entry point, router, login/MFA/reauth screens, recovery list, initiation form, recovery detail,
+  cancellation/rejection actions, and privileged audit view.
+- Dedicated API client with tenant headers permanently disabled and platform token/cookie handling isolated from the
+  tenant client. It must not read or write nodus tenant slug or tenant session storage.
+- Dedicated platform AuthProvider and permission guards. No tenant modules or tenant navigation are included.
+- Dedicated hostname, CORS allowlist, cookie name/path/domain, CSP configuration, environment variables, health check,
+  build artifact, and deployment job.
+- Shared design-system components are allowed only when they have no dependency on tenant auth, tenant routing, or
+  tenant API state.
+
+The platform console displays target identifiers, organization status, user status, permitted actions, reason code,
+external verification reference, state history, and audit references. It never displays credentials or token hashes.
+The raw invitation link is shown once after successful initiation and is also delivered through the outbox; it must
+not be written to browser logs, analytics, or error tracking.
+
+### 6.5 — Audit, monitoring, rollout, and dual-approval readiness
+
+Record append-only audit events for platform login/MFA/reauthentication, recovery initiation, detail access,
+invitation replacement, rejection, cancellation, expiry, verification, capability completion, and authorization
+failure. Each recovery event includes platform actor when applicable, target tenant/user, request ID, user agent,
+reason code, external verification reference, recovery ID as privileged_reference, and result.
+
+Add monitoring for:
+
+- recovery volume by platform actor, target organization, capability, state, and hour;
+- repeated targeting of one user or organization;
+- invitation verification failures and cross-tenant attempts;
+- incomplete or expired recoveries;
+- platform authentication failures, MFA resets, session revocations, and permission changes;
+- notification queue retry and terminal-failure rates.
+
+Rollout steps:
+
+1. Deploy schema and backend with platform recovery disabled by configuration.
+2. Provision the first platform administrators through the controlled operations command and verify MFA in staging.
+3. Deploy the platform console to its dedicated hostname and validate token/cookie/CORS separation.
+4. Exercise initiation, cancellation, rejection, expiry, password-only, MFA-only, and combined recovery in staging.
+5. Enable production access only for the named operations group and monitor every action during the initial period.
+6. Retain a kill switch that disables new initiation while preserving audit visibility and already completed records.
+
+Dual approval remains disabled in version 1. The state model must reserve awaiting_approval and approved transitions,
+but APIs must reject attempts to use them until a later phase defines approver separation, quorum, expiry, and
+notification rules.
+
+## Interim operational procedure until Phase 6 is enabled
+
+1. Direct the user through unified self-service recovery and the organization administrator through explicit
+   suspend/restore or reactivation workflows.
+2. If those fail, open an incident in the approved case system and record only tenant/user identifiers and the reason;
+   never copy passwords, MFA secrets, tokens, recovery codes, or identity documents into the case.
+3. Confirm that an active organization administrator cannot resolve the case. Escalate to the named security owner.
+4. Preserve audit logs, failure states, recovery records, session state, and email outbox records. Do not edit them to
+   manufacture a successful recovery.
+5. Do not directly set passwords, delete MFA factors/codes, clear explicit suspension/deactivation, or impersonate the
+   user. If identity cannot be recovered through supported flows, classify the account as currently unrecoverable.
+6. For confirmed compromise, use existing explicit suspension and session revocation controls, notify organization
+   contacts, and follow the security incident process.
+7. Close the case with the supported outcome or the reason recovery was refused. Use accumulated cases to validate
+   the need and policy for Phase 6.
+
+## Test and acceptance plan
+
+Backend and database:
+
+- Migration up/down tests, including refusal to roll back while active platform sessions or recoveries exist.
+- Platform table permission tests and proof that tenant RLS context cannot grant platform access.
+- Tenant tokens rejected by every platform endpoint and platform tokens rejected by every tenant endpoint.
+- Mandatory MFA, recent reauthentication, session rotation/revocation, disabled-user behavior, and concurrent refresh.
+- Permission, target lookup, cross-tenant, actor/IP/target rate limits, and concurrent state-transition tests.
+- Expired, reused, replaced, cancelled, rejected, cross-tenant, and over-attempted invitation equivalence.
+- Password-only, MFA-only, and combined capabilities; attempts outside capability are rejected.
+- Atomic completion, factor preservation until confirmation, recovery-code rotation, session revocation, and automatic
+  restriction clearing without lifecycle restoration.
+- Append-only privileged audit coverage and secret-redaction tests for logs, responses, audit metadata, and outbox.
+- Notification delivery, deduplication, retry, expiry, and terminal-failure tests.
+
+Frontend and deployment:
+
+- Platform auth restoration, MFA and reauthentication, permission guards, recovery lifecycle, and error-state tests.
+- Proof that platform requests never attach tenant headers or tenant tokens and tenant requests never attach platform
+  credentials.
+- Raw-token one-time display and log/analytics redaction tests.
+- CORS, cookie scope, CSP, independent build, type checking, linting, unit tests, and production build.
+- Staging end-to-end tests covering both console initiation and tenant-hostname completion.
+
+Acceptance criteria:
+
+- No platform operation can directly establish a tenant session or alter credentials.
+- No tenant identity can authenticate to or authorize a platform route.
+- Every recovery action is capability-limited, short-lived, single-use, revocable, notified, rate-limited, and audited.
+- Suspension, deactivation, and organization suspension remain authoritative throughout recovery.
+- Disabling initiation through configuration requires no schema rollback and does not hide historical audit records.
+- The tenant application remains deployable and operational independently of the platform console.
+
+## Explicitly out of scope for version 1
+
+- Dual approval enforcement, quorum management, or approver delegation.
+- Platform impersonation or tenant-session issuance.
+- Direct platform password setting, MFA deletion, recovery-code viewing, or lock-row editing.
+- Storage of identity documents or external verification evidence.
+- Converting tenant users or superusers into platform identities.
+- Automatic restoration of users or organizations.
+- A mobile platform console or third-party identity-provider integration.

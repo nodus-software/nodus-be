@@ -35,3 +35,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO nodus_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT EXECUTE ON FUNCTIONS TO nodus_app;
+
+-- Audit records are application-level append-only. Apply this after the broad
+-- table grants above each time the role script is refreshed.
+REVOKE UPDATE, DELETE ON audit_logs FROM nodus_app;

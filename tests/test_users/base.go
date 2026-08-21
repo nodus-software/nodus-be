@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nodus-health/internal/audit"
+	"nodus-health/internal/email"
 	"nodus-health/internal/users"
 	"nodus-health/pkg/logger"
 	"nodus-health/pkg/security"
@@ -156,6 +157,7 @@ type memoryRepo struct {
 	userRoles  map[string][]string // userID -> role IDs
 	roles      map[string]users.Role
 	superusers map[string]bool
+	emails     []email.Message
 }
 
 func newMemoryRepo() *memoryRepo {
@@ -205,12 +207,24 @@ func (r *memoryRepo) ReplaceUserRoles(_ context.Context, userID string, roleIDs 
 	return nil
 }
 
-func (r *memoryRepo) UpdateUserStatus(_ context.Context, userID, status string) error {
+func (r *memoryRepo) SuspendUser(_ context.Context, userID, actorID, reason string, at time.Time) error {
 	u, ok := r.users[userID]
 	if !ok {
 		return users.ErrUserNotFound
 	}
-	u.Status = users.Status(status)
+	u.Status = users.StatusSuspended
+	u.SuspendedAt, u.SuspendedBy, u.SuspensionReason = &at, &actorID, &reason
+	r.users[userID] = u
+	return nil
+}
+
+func (r *memoryRepo) RestoreUser(_ context.Context, userID string) error {
+	u, ok := r.users[userID]
+	if !ok {
+		return users.ErrUserNotFound
+	}
+	u.Status = users.StatusActive
+	u.SuspendedAt, u.SuspendedBy, u.SuspensionReason = nil, nil, nil
 	r.users[userID] = u
 	return nil
 }
@@ -277,13 +291,15 @@ func (r *memoryRepo) CountOtherActiveSuperusers(_ context.Context, userID string
 
 func (r *memoryRepo) LockUserLifecycle(context.Context) error { return nil }
 
-func (r *memoryRepo) DeactivateUser(_ context.Context, userID string, at time.Time) error {
+func (r *memoryRepo) DeactivateUser(_ context.Context, userID, actorID, reason string, at time.Time) error {
 	u, ok := r.users[userID]
 	if !ok {
 		return users.ErrUserNotFound
 	}
 	u.Status = users.StatusDeactivated
 	u.DeactivatedAt = &at
+	u.DeactivatedBy, u.DeactivationReason = &actorID, &reason
+	u.SuspendedAt, u.SuspendedBy, u.SuspensionReason = nil, nil, nil
 	r.users[userID] = u
 	return nil
 }
@@ -293,6 +309,14 @@ func (r *memoryRepo) RevokeRefreshTokensByUser(context.Context, string) error   
 func (r *memoryRepo) ConsumeLoginChallengesByUser(context.Context, string) error     { return nil }
 func (r *memoryRepo) ConsumePasswordResetTokensByUser(context.Context, string) error { return nil }
 func (r *memoryRepo) ConsumeEnrollmentTokensByUser(context.Context, string) error    { return nil }
+func (r *memoryRepo) ConsumeRecoverySessionsByUser(context.Context, string) error    { return nil }
+func (r *memoryRepo) GetTemporaryRestrictionsByUser(context.Context, string) ([]users.TemporaryRestriction, error) {
+	return nil, nil
+}
+func (r *memoryRepo) QueueEmail(_ context.Context, message email.Message) error {
+	r.emails = append(r.emails, message)
+	return nil
+}
 
 func (r *memoryRepo) WithinTx(_ context.Context, fn func(users.Repository) error) error {
 	return fn(r)

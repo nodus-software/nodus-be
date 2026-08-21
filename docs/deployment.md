@@ -62,6 +62,12 @@ REFRESH_COOKIE_SECURE=true
 WEBAUTHN_RP_ID=example.com
 WEBAUTHN_ORIGINS=https://example.com
 
+REDIS_ADDRESS=redis.internal:6379
+REDIS_PASSWORD=replace-me
+AUTH_SECURITY_MODE=observation
+AUTH_RATE_LIMIT_HMAC_SECRET=replace-with-an-independent-random-secret
+TURNSTILE_SECRET_KEY=replace-with-the-cloudflare-secret-key
+
 EMAIL_PROVIDER=zeptomail
 EMAIL_FROM_NAME=Nodus Health
 EMAIL_FROM_ADDRESS=no-reply@example.com
@@ -187,6 +193,74 @@ already exercised in staging. The deployment script rejects mutable tags and
 image names outside this repository.
 
 ## Deployment and recovery behavior
+
+Unified account recovery uses single-use email tokens and separately hashed,
+capability-scoped recovery sessions. Configure `RECOVERY_EMAIL_TOKEN_TTL`,
+`RECOVERY_SESSION_TTL`, and `RECOVERY_MAX_ATTEMPTS`; the secure defaults are
+10 minutes, 10 minutes, and five failed MFA confirmations respectively.
+
+### Adaptive authentication rollout
+
+Keep `AUTH_SECURITY_MODE=observation` until at least one representative traffic
+cycle has been reviewed. Before enabling enforcement, compare password and MFA
+failure distributions, shared-clinic IP throttling, Turnstile completion and
+error rates, recovery completion, and email outbox terminal failures. Pay
+particular attention to NATed clinic networks and accessibility-assisted users.
+
+Enable enforcement by setting `AUTH_SECURITY_MODE=enforcement` and redeploying.
+Production enforcement also requires `AUTH_RATE_LIMIT_HMAC_SECRET` and
+`TURNSTILE_SECRET_KEY`. Roll back immediately—without a schema rollback—by
+restoring `AUTH_SECURITY_MODE=observation` and redeploying. PostgreSQL continues
+recording durable failure state in either mode.
+
+Redis counters are supplemental. If Redis is unavailable, PostgreSQL account
+and mechanism controls remain authoritative and login continues; investigate
+the emitted operational errors and restore Redis before changing thresholds.
+When Turnstile is required but unavailable, affected authentication returns a
+generic temporary-unavailable response. Do not bypass Turnstile in production;
+direct users to account recovery while the provider is restored.
+
+Security email is written transactionally to `email_outbox`. The worker retries
+transient failures with bounded exponential backoff, records permanent failure,
+and removes message bodies after successful delivery. `dedupe_key` aggregates
+repeated lock and lifecycle notifications. To retry a terminal failure after
+correcting the provider, change the provider configuration and restart the
+worker; it automatically requeues failures last attempted by a different
+provider. Never copy token-bearing message bodies into tickets or logs.
+
+Useful monitoring queries (run with the migration/operations role) include:
+
+```sql
+-- Failure and restriction distribution during the last day.
+SELECT mechanism, failure_count, count(*)
+FROM authentication_failure_states
+WHERE updated_at >= now() - interval '24 hours'
+GROUP BY mechanism, failure_count ORDER BY mechanism, failure_count;
+
+-- Active restrictions, grouped by tenant and mechanism.
+SELECT tenant_id, mechanism, count(*)
+FROM authentication_failure_states
+WHERE locked_until > now() GROUP BY tenant_id, mechanism;
+
+-- Recovery starts and completions without exposing token hashes.
+SELECT date_trunc('hour', created_at) AS hour, count(*) AS started,
+       count(*) FILTER (WHERE consumed_at IS NOT NULL) AS consumed
+FROM recovery_sessions
+WHERE created_at >= now() - interval '24 hours' GROUP BY 1 ORDER BY 1;
+
+-- Outbox health. Do not select recipient or message bodies during routine monitoring.
+SELECT status, count(*), max(attempt_count) AS max_attempts
+FROM email_outbox GROUP BY status;
+```
+
+For an authentication incident, switch to observation mode only when controls
+are blocking legitimate traffic; preserve the audit and failure-state rows,
+check Redis and Turnstile health, inspect outbox status without reading secrets,
+revoke affected sessions, and use the explicit suspend endpoint for confirmed
+account compromise. Recovery and administrative unlock never restore suspended
+or deactivated accounts. Escalate platform-level recovery through the controlled
+operational procedure until Phase 6 exists; do not delete MFA or lock rows by
+hand as a normal recovery mechanism.
 
 The remote script serializes deployments with `flock`, accepts only an
 immutable `ghcr.io/nodus-software/nodus-be@sha256:...` reference, and performs this

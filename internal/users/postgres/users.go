@@ -32,6 +32,11 @@ func (r *Repository) ListUsers(ctx context.Context, filter users.ListUsersFilter
 			LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
 			NextAccessReviewDue: fromNullTimestamptz(row.NextAccessReviewDue),
 			DeactivatedAt:       fromNullTimestamptz(row.DeactivatedAt),
+			DeactivatedBy:       row.DeactivatedBy,
+			DeactivationReason:  row.DeactivationReason,
+			SuspendedAt:         fromNullTimestamptz(row.SuspendedAt),
+			SuspendedBy:         row.SuspendedBy,
+			SuspensionReason:    row.SuspensionReason,
 			InvitationExpiresAt: fromNullTimestamptz(row.InvitationExpiresAt),
 			InvitationUsedAt:    fromNullTimestamptz(row.InvitationUsedAt),
 			MFAEnrolled:         row.MfaEnrolled,
@@ -57,6 +62,11 @@ func (r *Repository) GetUserByID(ctx context.Context, id string) (*users.User, e
 		LastAccessReviewAt:  fromNullTimestamptz(row.LastAccessReviewAt),
 		NextAccessReviewDue: fromNullTimestamptz(row.NextAccessReviewDue),
 		DeactivatedAt:       fromNullTimestamptz(row.DeactivatedAt),
+		DeactivatedBy:       row.DeactivatedBy,
+		DeactivationReason:  row.DeactivationReason,
+		SuspendedAt:         fromNullTimestamptz(row.SuspendedAt),
+		SuspendedBy:         row.SuspendedBy,
+		SuspensionReason:    row.SuspensionReason,
 		InvitationExpiresAt: fromNullTimestamptz(row.InvitationExpiresAt),
 		InvitationUsedAt:    fromNullTimestamptz(row.InvitationUsedAt),
 		MFAEnrolled:         row.MfaEnrolled,
@@ -77,8 +87,11 @@ func (r *Repository) ReplaceUserRoles(ctx context.Context, userID string, roleID
 	return nil
 }
 
-func (r *Repository) UpdateUserStatus(ctx context.Context, userID, status string) error {
-	return r.q(ctx).UpdateUserStatus(ctx, sqlcgen.UpdateUserStatusParams{ID: userID, Status: sqlcgen.UserStatus(status)})
+func (r *Repository) SuspendUser(ctx context.Context, userID, actorUserID, reason string, suspendedAt time.Time) error {
+	return r.q(ctx).SuspendUser(ctx, sqlcgen.SuspendUserParams{ID: userID, SuspendedAt: toTimestamptz(suspendedAt), SuspendedBy: &actorUserID, SuspensionReason: &reason})
+}
+func (r *Repository) RestoreUser(ctx context.Context, userID string) error {
+	return r.q(ctx).RestoreUser(ctx, userID)
 }
 
 func (r *Repository) SetProviderIdentifier(ctx context.Context, userID, identifier string) error {
@@ -122,8 +135,8 @@ func (r *Repository) LockUserLifecycle(ctx context.Context) error {
 	return r.q(ctx).LockUserLifecycle(ctx)
 }
 
-func (r *Repository) DeactivateUser(ctx context.Context, userID string, deactivatedAt time.Time) error {
-	return r.q(ctx).DeactivateUser(ctx, sqlcgen.DeactivateUserParams{ID: userID, DeactivatedAt: toTimestamptz(deactivatedAt)})
+func (r *Repository) DeactivateUser(ctx context.Context, userID, actorUserID, reason string, deactivatedAt time.Time) error {
+	return r.q(ctx).DeactivateUser(ctx, sqlcgen.DeactivateUserParams{ID: userID, DeactivatedAt: toTimestamptz(deactivatedAt), DeactivatedBy: &actorUserID, DeactivationReason: &reason})
 }
 
 func (r *Repository) RevokeSessionsByUser(ctx context.Context, userID string) error {
@@ -144,4 +157,19 @@ func (r *Repository) ConsumePasswordResetTokensByUser(ctx context.Context, userI
 
 func (r *Repository) ConsumeEnrollmentTokensByUser(ctx context.Context, userID string) error {
 	return r.q(ctx).ConsumeEnrollmentTokensByUser(ctx, userID)
+}
+
+func (r *Repository) ConsumeRecoverySessionsByUser(ctx context.Context, userID string) error {
+	return r.q(ctx).ConsumeRecoverySessionsByUser(ctx, userID)
+}
+func (r *Repository) GetTemporaryRestrictionsByUser(ctx context.Context, userID string) ([]users.TemporaryRestriction, error) {
+	rows, err := r.q(ctx).GetTemporaryRestrictionsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]users.TemporaryRestriction, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, users.TemporaryRestriction{Mechanism: row.Mechanism, FailureCount: int(row.FailureCount), NextAttemptAt: fromNullTimestamptz(row.NextAttemptAt), LockedUntil: fromNullTimestamptz(row.LockedUntil)})
+	}
+	return out, nil
 }

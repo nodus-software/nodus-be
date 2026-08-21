@@ -44,6 +44,17 @@ func (q *Queries) ConsumePasswordResetTokensByUser(ctx context.Context, userID s
 	return err
 }
 
+const consumeRecoverySessionsByUser = `-- name: ConsumeRecoverySessionsByUser :exec
+UPDATE recovery_sessions SET consumed_at = now()
+WHERE user_id = $1 AND consumed_at IS NULL
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) ConsumeRecoverySessionsByUser(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, consumeRecoverySessionsByUser, userID)
+	return err
+}
+
 const countOtherActiveSuperusers = `-- name: CountOtherActiveSuperusers :one
 SELECT count(*) FROM users u
 WHERE u.id <> $1 AND u.status = 'active'
@@ -63,18 +74,26 @@ func (q *Queries) CountOtherActiveSuperusers(ctx context.Context, id string) (in
 }
 
 const deactivateUser = `-- name: DeactivateUser :exec
-UPDATE users SET status = 'deactivated', deactivated_at = $2
+UPDATE users SET status = 'deactivated', deactivated_at = $2, deactivated_by = $3,
+    deactivation_reason = $4, suspended_at = NULL, suspended_by = NULL, suspension_reason = NULL
 WHERE id = $1
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
 
 type DeactivateUserParams struct {
-	ID            string             `json:"id"`
-	DeactivatedAt pgtype.Timestamptz `json:"deactivated_at"`
+	ID                 string             `json:"id"`
+	DeactivatedAt      pgtype.Timestamptz `json:"deactivated_at"`
+	DeactivatedBy      *string            `json:"deactivated_by"`
+	DeactivationReason *string            `json:"deactivation_reason"`
 }
 
 func (q *Queries) DeactivateUser(ctx context.Context, arg DeactivateUserParams) error {
-	_, err := q.db.Exec(ctx, deactivateUser, arg.ID, arg.DeactivatedAt)
+	_, err := q.db.Exec(ctx, deactivateUser,
+		arg.ID,
+		arg.DeactivatedAt,
+		arg.DeactivatedBy,
+		arg.DeactivationReason,
+	)
 	return err
 }
 
@@ -124,8 +143,49 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, ids []string) ([]Role, erro
 	return items, nil
 }
 
+const getTemporaryRestrictionsByUser = `-- name: GetTemporaryRestrictionsByUser :many
+SELECT mechanism::text AS mechanism, failure_count, next_attempt_at, locked_until
+FROM authentication_failure_states
+WHERE user_id = $1
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  AND (locked_until > now() OR next_attempt_at > now())
+ORDER BY mechanism
+`
+
+type GetTemporaryRestrictionsByUserRow struct {
+	Mechanism     string             `json:"mechanism"`
+	FailureCount  int32              `json:"failure_count"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	LockedUntil   pgtype.Timestamptz `json:"locked_until"`
+}
+
+func (q *Queries) GetTemporaryRestrictionsByUser(ctx context.Context, userID string) ([]GetTemporaryRestrictionsByUserRow, error) {
+	rows, err := q.db.Query(ctx, getTemporaryRestrictionsByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTemporaryRestrictionsByUserRow
+	for rows.Next() {
+		var i GetTemporaryRestrictionsByUserRow
+		if err := rows.Scan(
+			&i.Mechanism,
+			&i.FailureCount,
+			&i.NextAttemptAt,
+			&i.LockedUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at FROM users
+SELECT id, full_name, username, email, password_hash, provider_identifier, status, failed_login_attempts, locked_until, password_changed_at, last_access_review_at, next_access_review_due, created_at, updated_at, tenant_id, deactivated_at, suspended_at, suspended_by, suspension_reason, deactivated_by, deactivation_reason FROM users
 WHERE id = $1
   AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
 `
@@ -150,12 +210,17 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 		&i.UpdatedAt,
 		&i.TenantID,
 		&i.DeactivatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedBy,
+		&i.SuspensionReason,
+		&i.DeactivatedBy,
+		&i.DeactivationReason,
 	)
 	return i, err
 }
 
 const getUserWithRolesByID = `-- name: GetUserWithRolesByID :one
-SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id, u.deactivated_at,
+SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id, u.deactivated_at, u.suspended_at, u.suspended_by, u.suspension_reason, u.deactivated_by, u.deactivation_reason,
     COALESCE(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}')::text[] AS role_names,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
@@ -194,6 +259,11 @@ type GetUserWithRolesByIDRow struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	TenantID            string             `json:"tenant_id"`
 	DeactivatedAt       pgtype.Timestamptz `json:"deactivated_at"`
+	SuspendedAt         pgtype.Timestamptz `json:"suspended_at"`
+	SuspendedBy         *string            `json:"suspended_by"`
+	SuspensionReason    *string            `json:"suspension_reason"`
+	DeactivatedBy       *string            `json:"deactivated_by"`
+	DeactivationReason  *string            `json:"deactivation_reason"`
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
@@ -221,6 +291,11 @@ func (q *Queries) GetUserWithRolesByID(ctx context.Context, id string) (GetUserW
 		&i.UpdatedAt,
 		&i.TenantID,
 		&i.DeactivatedAt,
+		&i.SuspendedAt,
+		&i.SuspendedBy,
+		&i.SuspensionReason,
+		&i.DeactivatedBy,
+		&i.DeactivationReason,
 		&i.RoleNames,
 		&i.PermissionCodes,
 		&i.MfaEnrolled,
@@ -270,7 +345,7 @@ func (q *Queries) InsertUserRole(ctx context.Context, arg InsertUserRoleParams) 
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id, u.deactivated_at,
+SELECT u.id, u.full_name, u.username, u.email, u.password_hash, u.provider_identifier, u.status, u.failed_login_attempts, u.locked_until, u.password_changed_at, u.last_access_review_at, u.next_access_review_due, u.created_at, u.updated_at, u.tenant_id, u.deactivated_at, u.suspended_at, u.suspended_by, u.suspension_reason, u.deactivated_by, u.deactivation_reason,
     COALESCE(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}')::text[] AS role_names,
     COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}')::text[] AS permission_codes,
     EXISTS (
@@ -326,6 +401,11 @@ type ListUsersRow struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	TenantID            string             `json:"tenant_id"`
 	DeactivatedAt       pgtype.Timestamptz `json:"deactivated_at"`
+	SuspendedAt         pgtype.Timestamptz `json:"suspended_at"`
+	SuspendedBy         *string            `json:"suspended_by"`
+	SuspensionReason    *string            `json:"suspension_reason"`
+	DeactivatedBy       *string            `json:"deactivated_by"`
+	DeactivationReason  *string            `json:"deactivation_reason"`
 	RoleNames           []string           `json:"role_names"`
 	PermissionCodes     []string           `json:"permission_codes"`
 	MfaEnrolled         bool               `json:"mfa_enrolled"`
@@ -359,6 +439,11 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 			&i.UpdatedAt,
 			&i.TenantID,
 			&i.DeactivatedAt,
+			&i.SuspendedAt,
+			&i.SuspendedBy,
+			&i.SuspensionReason,
+			&i.DeactivatedBy,
+			&i.DeactivationReason,
 			&i.RoleNames,
 			&i.PermissionCodes,
 			&i.MfaEnrolled,
@@ -401,6 +486,18 @@ func (q *Queries) RecordAccessReview(ctx context.Context, arg RecordAccessReview
 	return err
 }
 
+const restoreUser = `-- name: RestoreUser :exec
+UPDATE users SET status = 'active', suspended_at = NULL, suspended_by = NULL,
+    suspension_reason = NULL
+WHERE id = $1 AND status = 'suspended'
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+func (q *Queries) RestoreUser(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, restoreUser, id)
+	return err
+}
+
 const revokeRefreshTokensByUser = `-- name: RevokeRefreshTokensByUser :exec
 UPDATE refresh_tokens SET revoked_at = now()
 WHERE user_id = $1 AND revoked_at IS NULL
@@ -439,6 +536,30 @@ func (q *Queries) SetProviderIdentifier(ctx context.Context, arg SetProviderIden
 	return err
 }
 
+const suspendUser = `-- name: SuspendUser :exec
+UPDATE users SET status = 'suspended', suspended_at = $2, suspended_by = $3,
+    suspension_reason = $4
+WHERE id = $1 AND status <> 'suspended'
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+`
+
+type SuspendUserParams struct {
+	ID               string             `json:"id"`
+	SuspendedAt      pgtype.Timestamptz `json:"suspended_at"`
+	SuspendedBy      *string            `json:"suspended_by"`
+	SuspensionReason *string            `json:"suspension_reason"`
+}
+
+func (q *Queries) SuspendUser(ctx context.Context, arg SuspendUserParams) error {
+	_, err := q.db.Exec(ctx, suspendUser,
+		arg.ID,
+		arg.SuspendedAt,
+		arg.SuspendedBy,
+		arg.SuspensionReason,
+	)
+	return err
+}
+
 const unlockUser = `-- name: UnlockUser :exec
 UPDATE users SET locked_until = NULL, failed_login_attempts = 0
 WHERE id = $1
@@ -447,21 +568,5 @@ WHERE id = $1
 
 func (q *Queries) UnlockUser(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, unlockUser, id)
-	return err
-}
-
-const updateUserStatus = `-- name: UpdateUserStatus :exec
-UPDATE users SET status = $2
-WHERE id = $1
-  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
-`
-
-type UpdateUserStatusParams struct {
-	ID     string     `json:"id"`
-	Status UserStatus `json:"status"`
-}
-
-func (q *Queries) UpdateUserStatus(ctx context.Context, arg UpdateUserStatusParams) error {
-	_, err := q.db.Exec(ctx, updateUserStatus, arg.ID, arg.Status)
 	return err
 }

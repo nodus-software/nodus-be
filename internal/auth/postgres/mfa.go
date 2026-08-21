@@ -62,6 +62,10 @@ func (r *Repository) DeleteMFAFactor(ctx context.Context, id string) error {
 	return r.q(ctx).DeleteMFAFactor(ctx, id)
 }
 
+func (r *Repository) DeleteSupersededMFAFactors(ctx context.Context, userID, keepFactorID string) error {
+	return r.q(ctx).DeleteSupersededMFAFactors(ctx, sqlcgen.DeleteSupersededMFAFactorsParams{UserID: userID, ID: keepFactorID})
+}
+
 func (r *Repository) CountConfirmedMFAFactors(ctx context.Context, userID string) (int, error) {
 	n, err := r.q(ctx).CountConfirmedMFAFactors(ctx, userID)
 	return int(n), err

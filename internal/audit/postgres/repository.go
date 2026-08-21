@@ -34,14 +34,19 @@ func (r *Repository) Insert(ctx context.Context, entry audit.Entry) error {
 	}
 
 	return r.q(ctx).InsertAuditLog(ctx, sqlcgen.InsertAuditLogParams{
-		ID:             entry.ID,
-		Timestamp:      pgtype.Timestamptz{Time: entry.Timestamp, Valid: true},
-		UserID:         entry.UserID,
-		Action:         entry.Action,
-		TargetResource: entry.TargetResource,
-		IpAddress:      entry.IPAddress,
-		Result:         sqlcgen.AuditResult(entry.Result),
-		Metadata:       string(metadata),
+		ID:                  entry.ID,
+		Timestamp:           pgtype.Timestamptz{Time: entry.Timestamp, Valid: true},
+		UserID:              entry.UserID,
+		TargetUserID:        entry.TargetUserID,
+		Action:              entry.Action,
+		TargetResource:      entry.TargetResource,
+		IpAddress:           entry.IPAddress,
+		RequestID:           entry.RequestID,
+		UserAgent:           entry.UserAgent,
+		ReasonCode:          entry.ReasonCode,
+		PrivilegedReference: entry.PrivilegedReference,
+		Result:              sqlcgen.AuditResult(entry.Result),
+		Metadata:            string(metadata),
 	})
 }
 
@@ -71,8 +76,10 @@ func (r *Repository) List(ctx context.Context, filter audit.Filter, limit int) (
 		}
 		out = append(out, audit.Entry{
 			ID: row.ID, TenantID: row.TenantID, Timestamp: row.Timestamp.Time, UserID: row.UserID, Action: row.Action,
-			TargetResource: row.TargetResource, IPAddress: row.IpAddress,
-			Result: audit.Result(row.Result), Metadata: metadata,
+			TargetUserID: row.TargetUserID, TargetResource: row.TargetResource, IPAddress: row.IpAddress,
+			RequestID: row.RequestID, UserAgent: row.UserAgent, ReasonCode: row.ReasonCode,
+			PrivilegedReference: row.PrivilegedReference,
+			Result:              audit.Result(row.Result), Metadata: metadata,
 		})
 	}
 	return out, nil

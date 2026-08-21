@@ -341,10 +341,15 @@ func (s *Service) AcceptReactivation(ctx context.Context, rawToken, password str
 		if err := repo.ActivateReactivatedUser(ctx, token.UserID, passwordHash, now, now.Add(s.cfg.AccessReviewCycle)); err != nil {
 			return err
 		}
-		return repo.CreateEnrollmentToken(ctx, EnrollmentToken{
+		if err := repo.CreateEnrollmentToken(ctx, EnrollmentToken{
 			ID: enrollmentID, UserID: token.UserID, TokenHash: security.HashToken(rawEnrollment),
 			ExpiresAt: now.Add(s.cfg.EnrollmentTokenTTL),
-		})
+		}); err != nil {
+			return err
+		}
+		tenantID, _ := tenant.ID(ctx)
+		body := "Your Nodus Health account was reactivated and now requires MFA enrollment. If this was not expected, contact your organization administrator immediately."
+		return repo.QueueEmail(ctx, email.Message{TenantID: &tenantID, Kind: email.SecurityNotification, To: user.Email, Subject: "Your Nodus Health account was reactivated", Text: body, HTML: "<p>" + body + "</p>", DedupeKey: "reactivated:" + user.ID + ":" + now.UTC().Format("2006-01-02")})
 	})
 	if err != nil {
 		return nil, err
