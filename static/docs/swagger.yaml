@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
-  title: HMIS Authentication & Access Control API
-  version: "1.1"
+  title: Nodus Health API
+  version: "1.2"
   description: >
     Authentication, MFA, RBAC, session, and audit-logging contract designed to satisfy
     the Digital Health (Health Information Management Procedures) Regulations, 2025,
@@ -18,8 +18,9 @@ info:
     stored in a shared database with a `tenant_id` column enforced by database-level Row
     Level Security (RLS); the tenant_id embedded in a caller's access token (JWT claim
     `tid`) is the sole source of truth for scoping every query - it is never accepted as
-    a client-supplied parameter. username/email uniqueness is enforced per-tenant, not
-    globally: the same email may hold separate accounts at two different organizations.
+    a client-supplied parameter. Email addresses are globally unique so organization
+    discovery can resolve an account before a tenant is selected. Usernames and all
+    clinical data remain tenant-scoped.
 
     ## Response envelope
     Every JSON response is wrapped by the implementation. Successful responses use
@@ -138,6 +139,45 @@ paths:
               schema: { $ref: "#/components/schemas/OrganizationResponse" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/organization-discovery/request:
+    post:
+      tags: [Organizations]
+      summary: Start organization discovery for an account email
+      description: >
+        Public endpoint used before tenant selection. It either returns the account's
+        tenant login URL or sends a single-use verification email, subject to rate limits.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationDiscoveryRequest" }
+      responses:
+        "200":
+          description: Discovery action selected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizationDiscoveryResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/organization-discovery/verify:
+    post:
+      tags: [Organizations]
+      summary: Verify an organization-discovery token on the selected tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationDiscoveryVerifyRequest" }
+      responses:
+        "200":
+          description: Discovery token verified for the tenant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizationDiscoveryVerifyResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
 
   /organizations/activations/{token}/accept:
     post:
@@ -582,6 +622,129 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "422": { $ref: "#/components/responses/ValidationError" }
 
+  # ---------------- UNIFIED ACCOUNT RECOVERY ----------------
+
+  /auth/recovery/request:
+    post:
+      tags: [Password, MFA]
+      summary: Request password, MFA, or combined account recovery
+      description: >
+        Returns an accepted response after a valid request without disclosing whether
+        an account exists. Repeated attempts may require a Turnstile token. Any link is
+        delivered out of band.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryRequest" }
+      responses:
+        "202":
+          description: Recovery request accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusSuccessResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /auth/recovery/verify:
+    post:
+      tags: [Password, MFA]
+      summary: Exchange an email token for a capability-scoped recovery token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryVerifyRequest" }
+      responses:
+        "200":
+          description: Recovery session created; response is not cacheable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecoveryVerifyResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /auth/recovery/password:
+    post:
+      tags: [Password]
+      summary: Replace the password through a password-capable recovery session
+      description: Revokes existing sessions and refresh tokens and clears authentication failures.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryPasswordRequest" }
+      responses:
+        "204": { description: Password replaced; a fresh login is required }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/recovery/mfa/totp/setup:
+    post:
+      tags: [MFA]
+      summary: Begin replacement TOTP enrollment during recovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryTokenRequest" }
+      responses:
+        "200":
+          description: Pending TOTP factor created; response is not cacheable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TOTPSetupResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /auth/recovery/mfa/totp/confirm:
+    post:
+      tags: [MFA]
+      summary: Confirm replacement TOTP and complete MFA recovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryTOTPConfirmRequest" }
+      responses:
+        "200":
+          description: TOTP replaced and fresh recovery codes issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfirmTOTPResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /auth/recovery/mfa/webauthn/register/options:
+    post:
+      tags: [MFA]
+      summary: Begin replacement passkey registration during recovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryWebAuthnOptionsRequest" }
+      responses:
+        "200":
+          description: WebAuthn creation options and ceremony identifier
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnRegistrationOptionsResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /auth/recovery/mfa/webauthn/register/verify:
+    post:
+      tags: [MFA]
+      summary: Verify a replacement passkey and complete MFA recovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecoveryWebAuthnVerifyRequest" }
+      responses:
+        "200":
+          description: Passkey replaced; fresh recovery codes may be issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnRegistrationVerifyResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   /users/{userId}/unlock:
     post:
       tags: [Users]
@@ -785,7 +948,7 @@ paths:
   /users/{userId}:
     patch:
       tags: [Users]
-      summary: Update a user's details, roles, or status (admin only)
+      summary: Update a user's roles or provider identifier (admin only)
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: userId, in: path, required: true, schema: { type: string } }
@@ -796,7 +959,6 @@ paths:
               type: object
               properties:
                 role_ids: { type: array, items: { type: string } }
-                status: { type: string, enum: [active, suspended] }
                 provider_identifier:
                   type: string
                   description: Required when assigning a role that requires a provider identifier.
@@ -850,6 +1012,61 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/UserProfileResponse" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /users/{userId}/suspend:
+    post:
+      tags: [Users]
+      summary: Suspend an account and revoke all active credentials
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LifecycleReasonRequest" }
+      responses:
+        "200":
+          description: Account suspended
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserProfileResponse" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /users/{userId}/restore:
+    post:
+      tags: [Users]
+      summary: Restore a suspended account without restoring a deactivated account
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LifecycleReasonRequest" }
+      responses:
+        "200":
+          description: Suspended account restored to active
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserProfileResponse" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /users/{userId}/security-status:
+    get:
+      tags: [Users]
+      summary: Get explicit lifecycle state and temporary authentication restrictions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Current account security state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecurityStatusResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /users/{userId}/reactivate:
     post:
@@ -1547,6 +1764,15 @@ paths:
       parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: Visit, content: { application/json: { schema: { $ref: '#/components/schemas/VisitResponse' } } } }
+  /clinical/visits/{visitId}/context:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Get the current outpatient workflow context
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Visit, queue, encounters, allergies, orders and derived workflow stage, content: { application/json: { schema: { $ref: '#/components/schemas/OutpatientVisitContextResponse' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
   /clinical/outpatient/check-ins:
     post:
       tags: [Clinical]
@@ -1567,9 +1793,17 @@ paths:
     get:
       tags: [Clinical]
       security: [{ bearerAuth: [] }]
-      summary: List today's outpatient visits
-      parameters: [{ name: status, in: query, schema: { type: string, enum: [active, completed, cancelled] } }]
-      responses: { '200': { description: Visit list } }
+      summary: List and filter outpatient visits
+      parameters:
+        - { name: date, in: query, schema: { type: string, format: date } }
+        - { name: status, in: query, schema: { type: string, enum: [active, completed, cancelled] } }
+        - { name: stage, in: query, schema: { type: string, enum: [checked_in, triage, consultation, completed, cancelled] } }
+        - { name: service_point_id, in: query, schema: { type: string, format: uuid } }
+        - { name: clinician_id, in: query, schema: { type: string, format: uuid } }
+        - { name: q, in: query, schema: { type: string }, description: Patient name or medical-record search text. }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses: { '200': { description: Paginated outpatient visit list } }
   /clinical/visits/{visitId}/encounters:
     parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
     get:
@@ -1583,6 +1817,19 @@ paths:
       summary: Start outpatient triage or consultation
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEncounter' } } } }
       responses: { '201': { description: Started encounter }, '409': { $ref: '#/components/responses/Conflict' } }
+  /clinical/visits/{visitId}/encounters/override:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Start an encounter using an authorized workflow override
+      description: Requires both outpatient:consult and outpatient:workflow-override. The reason is audited.
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEncounterOverride' } } } }
+      responses:
+        '201': { description: Started encounter }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /clinical/encounters/{encounterId}/observations:
     post:
       tags: [Clinical]
@@ -1660,7 +1907,21 @@ paths:
       security: [{ bearerAuth: [] }]
       summary: Complete an outpatient visit after consultation and final diagnosis
       parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
-      responses: { '200': { description: Completed visit }, '422': { $ref: '#/components/responses/ValidationError' } }
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/CompleteVisit' } } } }
+      responses: { '200': { description: Completed visit }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /clinical/visits/{visitId}/complete/override:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Complete an outpatient visit despite outstanding required work
+      description: Requires outpatient:complete and outpatient:workflow-override. The reason is mandatory and audited.
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CompleteVisitOverride' } } } }
+      responses:
+        '200': { description: Completed visit }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /clinical/visits/{visitId}/summary:
     get:
       tags: [Clinical]
@@ -1758,6 +2019,72 @@ paths:
       summary: Create a queue routing rule
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateRoutingRule' } } } }
       responses: { '201': { description: Created routing rule } }
+  /clinical/visits/{visitId}/orders:
+    parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: List clinical orders for one visit
+      responses:
+        '200': { description: Visit orders, content: { application/json: { schema: { $ref: '#/components/schemas/ClinicalOrderListResponse' } } } }
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Place a service order
+      description: The server fixes kind to service; medication fields are ignored for this endpoint.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateServiceOrder' } } } }
+      responses:
+        '201': { description: Created service order, content: { application/json: { schema: { $ref: '#/components/schemas/ClinicalOrderResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/visits/{visitId}/prescriptions:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Place a medication prescription
+      description: The server fixes kind to medication and validates prescribing and allergy requirements.
+      parameters: [{ name: visitId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatePrescription' } } } }
+      responses:
+        '201': { description: Created medication order, content: { application/json: { schema: { $ref: '#/components/schemas/ClinicalOrderResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/orders:
+    get:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: List the tenant's clinical-order worklist
+      parameters:
+        - { name: visit_id, in: query, schema: { type: string, format: uuid } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [ordered, accepted, in_progress, completed, rejected, cancelled] } }
+        - { name: kind, in: query, schema: { type: string, enum: [service, medication] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        '200': { description: Paginated order worklist, content: { application/json: { schema: { $ref: '#/components/schemas/ClinicalOrderPageResponse' } } } }
+  /clinical/orders/{orderId}/transition:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Progress or reject a clinical order using optimistic version control
+      parameters: [{ name: orderId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransitionClinicalOrder' } } } }
+      responses:
+        '200': { description: Updated order, content: { application/json: { schema: { $ref: '#/components/schemas/ClinicalOrderResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /clinical/orders/{orderId}/cancel:
+    post:
+      tags: [Clinical]
+      security: [{ bearerAuth: [] }]
+      summary: Cancel a clinical order using optimistic version control
+      parameters: [{ name: orderId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CancelClinicalOrder' } } } }
+      responses:
+        '200': { description: Cancelled order, content: { application/json: { schema: { $ref: '#/components/schemas/ClinicalOrderResponse' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /clinical/terminology/icd10:
     get:
       tags: [Clinical]
@@ -2192,16 +2519,19 @@ components:
         cascade_allowed: { type: boolean }
     Visit:
       type: object
-      required: [id, patient_id, visit_type, status, started_at, created_by, created_at]
+      required: [id, patient_id, visit_type, status, started_at, created_by, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         patient_id: { type: string, format: uuid }
         visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
         status: { type: string, enum: [planned, active, completed, cancelled] }
         reason: { type: string, nullable: true }
+        service_point_id: { type: string, format: uuid, nullable: true }
         started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
         created_by: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     CreateVisit:
       type: object
       required: [patient_id, visit_type]
@@ -2209,18 +2539,25 @@ components:
         patient_id: { type: string, format: uuid }
         visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
         reason: { type: string }
+        service_point_id: { type: string, format: uuid }
     OutpatientCheckIn:
       type: object
       required: [patient_id]
-      properties: { patient_id: { type: string, format: uuid }, reason: { type: string } }
+      properties: { patient_id: { type: string, format: uuid }, reason: { type: string }, service_point_id: { type: string, format: uuid } }
     OutpatientCheckInOverride:
       type: object
       required: [patient_id, override_reason]
-      properties: { patient_id: { type: string, format: uuid }, reason: { type: string }, override_reason: { type: string, minLength: 1 } }
+      properties: { patient_id: { type: string, format: uuid }, reason: { type: string }, service_point_id: { type: string, format: uuid }, override_reason: { type: string, minLength: 1 } }
     CreateEncounter:
       type: object
       required: [encounter_type]
       properties: { encounter_type: { type: string, enum: [triage, consultation] }, service_point_id: { type: string, format: uuid } }
+    CreateEncounterOverride:
+      allOf:
+        - { $ref: '#/components/schemas/CreateEncounter' }
+        - type: object
+          required: [override_reason]
+          properties: { override_reason: { type: string, minLength: 1 } }
     ObservationInput:
       type: object
       required: [code]
@@ -2234,6 +2571,16 @@ components:
       type: object
       properties:
         expected_updated_at: { type: string, format: date-time, description: Optional optimistic concurrency value }
+    CompleteVisit:
+      type: object
+      properties:
+        expected_updated_at: { type: string, format: date-time, description: Optional optimistic concurrency value }
+    CompleteVisitOverride:
+      allOf:
+        - { $ref: '#/components/schemas/CompleteVisit' }
+        - type: object
+          required: [override_reason]
+          properties: { override_reason: { type: string, minLength: 1 } }
     CreateNote:
       type: object
       required: [note_type, body]
@@ -2320,10 +2667,126 @@ components:
       required: [name, event_type, target_queue_id, priority]
       properties:
         name: { type: string }
-        event_type: { type: string, enum: [visit.created] }
+        event_type: { type: string }
         visit_type: { type: string, enum: [test, outpatient, emergency, specialty] }
+        encounter_type: { type: string, enum: [triage, consultation, ward_round, nursing, other] }
+        order_kind: { type: string, enum: [service, medication] }
+        service_category: { type: string }
         target_queue_id: { type: string, format: uuid }
         priority: { type: integer, minimum: 0, maximum: 100 }
+    ServiceOrderDetail:
+      type: object
+      required: [service_id, service_code, service_name]
+      properties:
+        service_id: { type: string, format: uuid }
+        service_code: { type: string }
+        service_name: { type: string }
+    MedicationOrderDetail:
+      type: object
+      required: [medication_id, medication_code, medication_name, dose, dose_unit, route, frequency]
+      properties:
+        medication_id: { type: string, format: uuid }
+        medication_code: { type: string }
+        medication_name: { type: string }
+        dose: { type: number, minimum: 0, exclusiveMinimum: true }
+        dose_unit: { type: string }
+        route: { type: string }
+        frequency: { type: string }
+        duration_days: { type: integer, minimum: 1, nullable: true }
+        quantity: { type: number, minimum: 0, exclusiveMinimum: true, nullable: true }
+        instructions: { type: string, nullable: true }
+        allergy_override_reason: { type: string, nullable: true }
+        allergy_acknowledged_at: { type: string, format: date-time, nullable: true }
+    ClinicalOrder:
+      type: object
+      required: [id, patient_id, visit_id, encounter_id, kind, category, priority, status, review_required, ordered_by, ordered_at, version, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        patient_id: { type: string, format: uuid }
+        visit_id: { type: string, format: uuid }
+        encounter_id: { type: string, format: uuid }
+        kind: { type: string, enum: [service, medication] }
+        category: { type: string }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        status: { type: string, enum: [ordered, accepted, in_progress, completed, rejected, cancelled] }
+        review_required: { type: boolean }
+        ordered_by: { type: string, format: uuid }
+        ordered_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        transition_reason: { type: string, nullable: true }
+        version: { type: integer, minimum: 1 }
+        updated_at: { type: string, format: date-time }
+        service: { $ref: '#/components/schemas/ServiceOrderDetail' }
+        medication: { $ref: '#/components/schemas/MedicationOrderDetail' }
+    CreateServiceOrder:
+      type: object
+      required: [encounter_id, service_id]
+      properties:
+        encounter_id: { type: string, format: uuid }
+        service_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        review_required: { type: boolean }
+    CreatePrescription:
+      type: object
+      required: [encounter_id, medication_id, dose, dose_unit, route, frequency]
+      properties:
+        encounter_id: { type: string, format: uuid }
+        medication_id: { type: string, format: uuid }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        review_required: { type: boolean }
+        dose: { type: number, minimum: 0, exclusiveMinimum: true }
+        dose_unit: { type: string }
+        route: { type: string }
+        frequency: { type: string }
+        duration_days: { type: integer, minimum: 1 }
+        quantity: { type: number, minimum: 0, exclusiveMinimum: true }
+        instructions: { type: string }
+        allergy_override_reason: { type: string, description: Required when the patient has a relevant active allergy. }
+    TransitionClinicalOrder:
+      type: object
+      required: [status, expected_version]
+      properties:
+        status: { type: string, enum: [accepted, in_progress, completed, rejected] }
+        expected_version: { type: integer, minimum: 1 }
+        reason: { type: string }
+    CancelClinicalOrder:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version: { type: integer, minimum: 1 }
+        reason: { type: string }
+    OutpatientVisitContext:
+      type: object
+      required: [visit, encounters, allergies, orders, workflow_stage]
+      properties:
+        visit: { $ref: '#/components/schemas/Visit' }
+        current_queue_entry: { $ref: '#/components/schemas/QueueEntry' }
+        encounters: { type: array, items: { $ref: '#/components/schemas/Encounter' } }
+        allergies: { type: array, items: { type: object, additionalProperties: true } }
+        orders: { type: array, items: { $ref: '#/components/schemas/ClinicalOrder' } }
+        workflow_stage: { type: string, enum: [checked_in, triage, consultation, completed, cancelled] }
+    ClinicalOrderResponse:
+      allOf:
+        - { $ref: '#/components/schemas/SuccessResponse' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/ClinicalOrder' } }
+    ClinicalOrderListResponse:
+      allOf:
+        - { $ref: '#/components/schemas/SuccessResponse' }
+        - type: object
+          properties:
+            data: { type: array, items: { $ref: '#/components/schemas/ClinicalOrder' } }
+    ClinicalOrderPageResponse:
+      allOf:
+        - { $ref: '#/components/schemas/ClinicalOrderListResponse' }
+        - type: object
+          properties: { meta: { $ref: '#/components/schemas/PaginationMeta' } }
+    OutpatientVisitContextResponse:
+      allOf:
+        - { $ref: '#/components/schemas/SuccessResponse' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/OutpatientVisitContext' } }
     ResourceResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
     DeactivationImpactResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
     ResourceListResponse: { allOf: [{ $ref: '#/components/schemas/SuccessResponse' }] }
@@ -2372,6 +2835,154 @@ components:
           allOf:
             - { $ref: "#/components/schemas/PaginationMeta" }
           nullable: true
+
+    OrganizationDiscoveryRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    OrganizationDiscoveryVerifyRequest:
+      type: object
+      required: [token, slug]
+      properties:
+        token: { type: string }
+        slug: { type: string, pattern: "^[a-z0-9-]{3,32}$" }
+
+    OrganizationDiscoveryResult:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string }
+        login_url: { type: string, format: uri }
+
+    OrganizationDiscoveryResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/OrganizationDiscoveryResult" }
+
+    OrganizationDiscoveryVerifyResult:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    OrganizationDiscoveryVerifyResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/OrganizationDiscoveryVerifyResult" }
+
+    RecoveryRequest:
+      type: object
+      required: [email, intent]
+      properties:
+        email: { type: string, format: email }
+        intent: { type: string, enum: [password, mfa, both] }
+        turnstile_token: { type: string }
+
+    RecoveryVerifyRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string }
+
+    RecoveryVerifyResult:
+      type: object
+      required: [recovery_token, capabilities, expires_at]
+      properties:
+        recovery_token: { type: string }
+        capabilities:
+          type: array
+          items: { type: string, enum: [password, mfa] }
+        expires_at: { type: string, format: date-time }
+
+    RecoveryVerifyResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/RecoveryVerifyResult" }
+
+    RecoveryTokenRequest:
+      type: object
+      required: [recovery_token]
+      properties:
+        recovery_token: { type: string }
+
+    RecoveryPasswordRequest:
+      type: object
+      required: [recovery_token, new_password]
+      properties:
+        recovery_token: { type: string }
+        new_password: { type: string }
+
+    RecoveryTOTPConfirmRequest:
+      type: object
+      required: [recovery_token, code]
+      properties:
+        recovery_token: { type: string }
+        code: { type: string }
+
+    RecoveryWebAuthnOptionsRequest:
+      type: object
+      required: [recovery_token, label]
+      properties:
+        recovery_token: { type: string }
+        label: { type: string, maxLength: 80 }
+
+    RecoveryWebAuthnVerifyRequest:
+      type: object
+      required: [recovery_token, ceremony_id, credential]
+      properties:
+        recovery_token: { type: string }
+        ceremony_id: { type: string }
+        credential: { type: object, additionalProperties: true }
+
+    ConfirmTOTPResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }
+        recovery_codes: { type: array, items: { type: string } }
+
+    ConfirmTOTPResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/ConfirmTOTPResult" }
+
+    WebAuthnRegistrationOptionsResult:
+      type: object
+      required: [ceremony_id, public_key]
+      properties:
+        ceremony_id: { type: string }
+        public_key: { type: object, additionalProperties: true }
+
+    WebAuthnRegistrationOptionsResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/WebAuthnRegistrationOptionsResult" }
+
+    WebAuthnRegistrationVerifyResult:
+      type: object
+      required: [factor]
+      properties:
+        factor: { $ref: "#/components/schemas/MFAFactor" }
+        recovery_codes: { type: array, items: { type: string } }
+
+    WebAuthnRegistrationVerifyResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/WebAuthnRegistrationVerifyResult" }
 
     SlugAvailability:
       type: object
@@ -2614,9 +3225,48 @@ components:
         permissions: { type: array, items: { type: string }, description: "Effective permissions resolved from roles" }
         status: { type: string, enum: [invited, active, suspended, pending_review, deactivated] }
         deactivated_at: { type: string, format: date-time, nullable: true }
+        deactivated_by: { type: string, nullable: true }
+        deactivation_reason: { type: string, nullable: true }
+        suspended_at: { type: string, format: date-time, nullable: true }
+        suspended_by: { type: string, nullable: true }
+        suspension_reason: { type: string, nullable: true }
+        invitation_expires_at: { type: string, format: date-time, nullable: true }
+        invitation_status: { type: string, enum: [valid, expired], nullable: true }
         mfa_enrolled: { type: boolean }
-        last_access_review_at: { type: string, format: date-time }
-        next_access_review_due: { type: string, format: date-time }
+        last_access_review_at: { type: string, format: date-time, nullable: true }
+        next_access_review_due: { type: string, format: date-time, nullable: true }
+
+    TemporaryRestriction:
+      type: object
+      required: [mechanism, failure_count]
+      properties:
+        mechanism: { type: string }
+        failure_count: { type: integer, minimum: 0 }
+        next_attempt_at: { type: string, format: date-time, nullable: true }
+        locked_until: { type: string, format: date-time, nullable: true }
+
+    SecurityStatus:
+      type: object
+      required: [user_id, status, temporary_restrictions]
+      properties:
+        user_id: { type: string }
+        status: { type: string, enum: [invited, active, suspended, pending_review, deactivated] }
+        suspended_at: { type: string, format: date-time, nullable: true }
+        suspended_by: { type: string, nullable: true }
+        suspension_reason: { type: string, nullable: true }
+        deactivated_at: { type: string, format: date-time, nullable: true }
+        deactivated_by: { type: string, nullable: true }
+        deactivation_reason: { type: string, nullable: true }
+        temporary_restrictions:
+          type: array
+          items: { $ref: "#/components/schemas/TemporaryRestriction" }
+
+    SecurityStatusResponse:
+      allOf:
+        - { $ref: "#/components/schemas/SuccessResponse" }
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/SecurityStatus" }
 
     Role:
       type: object
